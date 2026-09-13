@@ -221,6 +221,7 @@
               :disabled="!inputText.trim()"
               class="btn-send"
               aria-label="发送消息"
+              @pointerdown.prevent
               @click="handleSendMessage"
             >
               <el-icon><Promotion /></el-icon>

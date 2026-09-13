@@ -271,6 +271,5 @@ const handleLogout = async () => {
     min-width: 64px; min-height: 44px; text-decoration: none; color: #91908f; font-size: 10px; font-weight: 500; border-radius: 14px; }
   .mobile-tabbar .el-icon { font-size: 21px; }
   .mobile-tabbar a.active { color: #a55d7a; background: #fcf0f5; }
-  .mobile-chat-page:has(.chat-textarea textarea:focus) .mobile-tabbar { display: none; }
 }
 </style>
