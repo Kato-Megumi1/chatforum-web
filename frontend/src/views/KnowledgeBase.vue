@@ -25,7 +25,16 @@
             :show-file-list="false" :before-upload="beforeUpload" :on-success="uploaded" :on-error="uploadError" accept=".epub,.txt,.pdf">
             <el-button type="primary" plain>{{ currentDoc(kb) ? '上传小说修订版' : '导入小说原文' }}</el-button>
           </el-upload>
-          <el-table :data="kb.documents">
+          <div class="mobile-document-list">
+            <div v-for="doc in kb.documents" :key="doc.id" class="mobile-document">
+              <el-icon><Document /></el-icon><div><strong>{{ doc.fileName }}</strong>
+                <p>原文 v{{ doc.version }} · {{ doc.isCurrent ? '当前版本' : '历史版本' }} · {{ doc.chunkCount }} 段</p>
+                <span>{{ doc.status === 'COMPLETED' ? '已入库' : doc.status }}</span>
+              </div>
+            </div>
+            <p v-if="!kb.documents.length">尚未导入原文</p>
+          </div>
+          <el-table :data="kb.documents" class="document-table">
             <el-table-column prop="fileName" label="文件" min-width="220" />
             <el-table-column prop="version" label="版本" width="70" />
             <el-table-column label="当前" width="80"><template #default="{ row }">{{ row.isCurrent ? '是' : '历史' }}</template></el-table-column>
@@ -233,4 +242,29 @@ onUnmounted(() => clearInterval(timer));
 .passage { padding: 16px 0; border-bottom: 1px solid #e7eaf0; }
 .passage p { white-space: pre-wrap; }
 .setup-hint { padding: 12px; border-radius: 10px; background: #fff9ed; }
+.mobile-document-list { display: none; }
+@media (max-width: 900px) {
+  .novel-page { padding: 18px 16px 28px; background: #faf9f7; }
+  .heading { gap: 14px; }
+  .heading h2 { font-size: 25px; color: #302c31; letter-spacing: -.6px; }
+  .heading p { font-size: 12px; color: #a0949c; margin-top: 10px; }
+  .heading > .el-button { border-radius: 20px; background: #a66b83; border: 0; padding: 18px 16px; }
+  .book { border: 1px solid #eee7eb; border-radius: 20px; box-shadow: 0 4px 20px #3e303b04; }
+  .book :deep(.el-card__header) { padding: 20px 18px; background: #fffcfd; border-color: #f2edf0; }
+  .book :deep(.el-card__body) { padding: 18px; }
+  .book p { font-size: 12px; line-height: 1.85; }
+  .book strong { font-size: 16px; color: #493c45; }
+  .badges { gap: 6px; margin: 16px 0; }
+  .badges .el-tag { font-size: 10px; border: 0; border-radius: 7px; }
+  .book :deep(.el-tabs__item) { font-size: 12px; padding: 0 14px; }
+  .book :deep(.el-tabs__nav-wrap::after) { height: 1px; background: #f0eaee; }
+  .document-table { display: none; }
+  .mobile-document-list { display: block; margin-top: 16px; }
+  .mobile-document { display: flex; align-items: flex-start; gap: 12px; padding: 16px 12px; background: #f8f5f7; border-radius: 14px; margin: 10px 0; }
+  .mobile-document > .el-icon { font-size: 23px; color: #aa7b92; padding-top: 2px; flex-shrink: 0; }
+  .mobile-document > div { min-width: 0; }
+  .mobile-document strong { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 12px; line-height: 1.8; font-weight: 500; }
+  .mobile-document p { font-size: 10px; color: #a0949c; margin: 6px 0; }
+  .mobile-document span { font-size: 10px; color: #728b7b; }
+}
 </style>

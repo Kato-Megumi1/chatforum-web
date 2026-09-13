@@ -196,4 +196,8 @@ onMounted(() => {
   .banner-info { flex-basis: 150px; overflow-wrap: anywhere; }
   .space-badges { flex-wrap: wrap; }
 }
+@media (max-width: 900px) {
+  .user-space-container { background: #faf9f7; }
+  .user-space-main { border: 1px solid #eee7eb; border-radius: 20px; box-shadow: none; }
+}
 </style>

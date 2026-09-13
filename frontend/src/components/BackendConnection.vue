@@ -1,5 +1,5 @@
 <template>
-  <div class="connection">
+  <div class="connection" :class="{ 'connection-in-app': !['/login', '/register'].includes(route.path) }">
     <el-button text size="small" @click="visible = true">连接设置</el-button>
     <el-dialog v-model="visible" title="后端连接" width="min(480px, 95vw)" append-to-body>
       <p>异地访问时填写本机后端的 HTTPS 隧道地址，末尾加 /api。电脑与 Docker 需要保持运行。</p>
@@ -13,10 +13,15 @@
   </div>
 </template>
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, onMounted, onUnmounted } from 'vue';
+import { useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { API_BASE } from '@/utils/api';
 const visible = ref(location.hostname.endsWith('.github.io') && API_BASE === '/api');
+const route = useRoute();
+const open = () => { visible.value = true; };
+onMounted(() => window.addEventListener('chatforum:connection-settings', open));
+onUnmounted(() => window.removeEventListener('chatforum:connection-settings', open));
 const address = ref(API_BASE), result = ref(''), checking = ref(false);
 function valid() {
   if (address.value === '/api') return true;
@@ -45,4 +50,5 @@ function save() {
 </script>
 <style scoped>
 .connection { position: fixed; right: 12px; bottom: max(8px, env(safe-area-inset-bottom)); z-index: 1500; background: white; border-radius: 8px; opacity: .95; }
+@media (max-width: 900px) { .connection-in-app > .el-button { display: none; } }
 </style>

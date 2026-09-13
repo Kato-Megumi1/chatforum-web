@@ -155,5 +155,9 @@ const handleLogin = async () => {
   .login-container { min-height: 100svh; height: auto; padding: 24px 16px 56px; justify-content: center; }
   .login-card { width: min(400px, 100%); padding: 30px 24px; }
   :deep(.el-input__inner) { font-size: 16px; }
+  .login-card { border-radius: 26px; box-shadow: 0 12px 50px #38253626; }
+  .login-card :deep(.el-input__wrapper) { min-height: 46px; border-radius: 12px; }
+  .login-card :deep(.el-button--primary) { min-height: 46px; border-radius: 14px; background: #a66b83; border: 0; }
+  .login-footer a { color: #a66b83; }
 }
 </style>

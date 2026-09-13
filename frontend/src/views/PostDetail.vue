@@ -188,4 +188,15 @@ h2 { font-size: 19px; margin: 0; } h2 span { font-size: 12px; background: #f0f4f
 .comment-meta strong, .reply strong, .post-meta strong { overflow-wrap: anywhere; min-width: 0; }
 .comment-body :deep(.el-pagination) { flex-wrap: wrap; }
 @media (max-width: 600px) { .post-wrapper { padding: 16px 12px 32px; } .post-card { padding: 22px 16px; border-radius: 14px; } h1 { font-size: 22px; } .composer { padding: 12px; } .composer-actions span { max-width: 100px; } }
+@media (max-width: 900px) {
+  .post-page { background: #faf9f7; }
+  .post-wrapper { padding: 16px 16px 28px; }
+  .post-card { border: 1px solid #eee7eb; box-shadow: none; border-radius: 20px; padding: 22px 18px; }
+  .eyebrow { color: #a17c8f; font-size: 9px; }
+  h1 { color: #3c333a; font-size: 22px; letter-spacing: -.3px; }
+  .post-content { color: #50454d; font-size: 15px; }
+  .composer, .replies { background: #f7f2f5; border-radius: 14px; }
+  .comment-meta strong { color: #69555f; }
+  .post-actions .el-button, .composer-actions .el-button { min-height: 38px; }
+}
 </style>

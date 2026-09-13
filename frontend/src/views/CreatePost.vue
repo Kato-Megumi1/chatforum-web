@@ -205,4 +205,10 @@ onMounted(() => {
   .create-post-wrapper { padding: 16px 12px 48px; }
   .create-post-main { padding: 20px 16px; }
 }
+@media (max-width: 900px) {
+  .create-post-container { background: #faf9f7; }
+  .create-post-main { border: 1px solid #eee7eb; border-radius: 20px; box-shadow: none; }
+  .page-title { color: #3c333a; }
+  .btn-submit { background: #a66b83; border: 0; box-shadow: none; }
+}
 </style>

@@ -463,7 +463,7 @@ onUnmounted(() => {
   margin-top: 28px;
 }
 
-@media (max-width: 1100px) {
+@media (max-width: 900px) {
   .content-toolbar { flex-wrap: wrap; }
   .search-input { flex-basis: 100%; max-width: none; }
   .post-card-footer { flex-wrap: wrap; gap: 12px; }
@@ -489,5 +489,37 @@ onUnmounted(() => {
   .forum-hero p { line-height: 1.6; }
   .post-card { padding: 16px; }
   .pagination-wrapper :deep(.el-pagination__total) { display: none; }
+}
+@media (max-width: 900px) {
+  .forum-container { background: #faf9f7; }
+  .forum-hero { padding: 20px 20px 22px; background: transparent; border: 0; flex-wrap: nowrap; gap: 14px; }
+  .hero-content { min-width: 0; flex: 1; }
+  .forum-hero h1 { font-size: 25px; color: #302c31; letter-spacing: -.6px; margin-bottom: 8px; }
+  .forum-hero p { font-size: 11px; color: #9b9098; line-height: 1.7; }
+  .btn-publish { flex-shrink: 0; height: 38px; padding: 0 14px; font-size: 12px; border: 0; background: #a66b83; box-shadow: none; }
+  .forum-main { padding: 0 16px 28px; gap: 14px; }
+  .forum-sidebar { gap: 10px; }
+  .sidebar-card { padding: 0; background: none; box-shadow: none; min-width: 0; }
+  .card-title { display: none; }
+  .category-list { flex-wrap: nowrap; overflow-x: auto; padding: 2px 0; gap: 8px; scrollbar-width: none; }
+  .category-item { white-space: nowrap; min-height: 38px; padding: 9px 16px; border-radius: 20px; background: #eeeae8; color: #81767d; }
+  .category-item.active { background: #463c43; color: #fff; font-weight: 500; }
+  .category-count { display: none; }
+  .tag-cloud { gap: 6px; }
+  .tag-item { border: 0; border-radius: 8px; background: #f3eeef; color: #a18493; font-size: 10px; }
+  .content-toolbar { gap: 12px; margin-bottom: 18px; }
+  .search-input :deep(.el-input__wrapper) { min-height: 44px; border: 1px solid #ebe5e8; box-shadow: none; background: #fff; }
+  .sort-group :deep(.el-radio-button__inner) { border: 0; box-shadow: none; background: transparent; padding: 7px 12px; color: #a3979f; }
+  .sort-group :deep(.is-active .el-radio-button__inner) { color: #955d76; background: #f3e5ed; }
+  .post-card { padding: 20px 18px; border: 1px solid #eee8ec; border-radius: 18px; box-shadow: 0 2px 8px #39303803; }
+  .post-card:hover { transform: none; }
+  .post-badges:empty { display: none; }
+  .post-title { font-size: 16px; line-height: 1.7; color: #3d343b; font-weight: 600; }
+  .post-card-footer { gap: 14px; }
+  .post-author { flex-basis: 100%; }
+  .author-name { font-size: 12px; color: #897e85; }
+  .post-stats { font-size: 11px; gap: 16px; color: #a69aa2; width: 100%; }
+  .stat-time { margin-left: auto; font-size: 10px; }
+  .pagination-wrapper { margin-top: 22px; }
 }
 </style>

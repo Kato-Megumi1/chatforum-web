@@ -1,7 +1,16 @@
 <template>
   <div class="chat-layout">
-    <el-button class="mobile-conversations" @click="mobileSidebar = !mobileSidebar" :aria-expanded="mobileSidebar">对话列表</el-button>
+    <header class="mobile-chat-header">
+      <button class="mobile-icon-button mobile-conversations" @click="mobileSidebar = !mobileSidebar" :aria-expanded="mobileSidebar" aria-label="对话列表"><el-icon><Expand /></el-icon></button>
+      <button class="mobile-conversation-title" @click="mobileOptions = !mobileOptions" :aria-expanded="mobileOptions" :disabled="!chatStore.currentConversation" aria-label="对话选项">
+        <img v-if="selectedPersona === 'kato_megumi_persona'" :src="publicAsset('kato-megumi-avatar.jpg')" alt="" />
+        <span><strong>{{ hasPersonaActive ? personaDisplayName : 'AI 对话' }} <el-icon><ArrowDown /></el-icon></strong>
+          <small>{{ hasPersonaActive ? '角色扮演' : '随时聊点什么' }}<template v-if="selectedKnowledgeBaseId"> · 已选知识库</template></small></span>
+      </button>
+      <button class="mobile-icon-button" @click="handleNewChat(); mobileSidebar = false" aria-label="新建对话"><el-icon><EditPen /></el-icon></button>
+    </header>
     <button v-if="mobileSidebar" class="sidebar-backdrop" aria-label="关闭对话列表" @click="mobileSidebar = false"></button>
+    <button v-if="mobileOptions" class="mobile-options-backdrop" aria-label="关闭对话选项" @click="mobileOptions = false"></button>
     <aside class="chat-sidebar" :class="{ 'mobile-open': mobileSidebar }">
       <div class="sidebar-header">
         <el-button type="primary" class="btn-new-chat" @click="handleNewChat(); mobileSidebar = false">
@@ -57,6 +66,7 @@
           <el-icon><Setting /></el-icon>
           模型设置
         </el-button>
+        <el-button class="mobile-connection-button" text @click="openConnection"><el-icon><Connection /></el-icon>连接设置</el-button>
       </div>
     </aside>
     <main class="chat-main" :class="{ 'persona-theme': hasPersonaActive }">
@@ -82,7 +92,8 @@
           <span class="persona-bar-text">正在与 <strong>{{ personaDisplayName }}</strong> 对话中</span>
           <el-tag size="small" type="danger" effect="plain">角色扮演模式</el-tag>
         </div>
-        <div class="chat-toolbar">
+        <div class="chat-toolbar" :class="{ 'mobile-open': mobileOptions }">
+          <div class="mobile-options-heading"><strong>对话选项</strong><button class="mobile-icon-button" @click="mobileOptions = false" aria-label="收起对话选项"><el-icon><Close /></el-icon></button></div>
           <div class="toolbar-left">
             <div class="toolbar-item persona-select">
               <span class="toolbar-label">角色扮演</span>
@@ -280,6 +291,8 @@ import { useRoute, useRouter } from 'vue-router';
 const chatStore = useChatStore();
 const router = useRouter(), route = useRoute();
 const mobileSidebar = ref(false);
+const mobileOptions = ref(false);
+const openConnection = () => { window.dispatchEvent(new Event('chatforum:connection-settings')); mobileSidebar.value = false; };
 const userStore = useUserStore();
 const messagesRef = ref<HTMLElement>();
 const scrollAnchor = ref<HTMLElement>();
@@ -1591,24 +1604,72 @@ onMounted(async () => {
   font-size: 11px;
 }
 
-.mobile-conversations, .sidebar-backdrop { display: none; }
+.mobile-chat-header, .sidebar-backdrop, .mobile-options-backdrop, .mobile-options-heading, .mobile-connection-button { display: none; }
 @media (max-width: 900px) {
-  .chat-layout { flex-direction: column; position: relative; }
-  .mobile-conversations { display: block; margin: 4px 8px; align-self: flex-start; min-height: 30px; }
-  .chat-sidebar { position: absolute; left: 0; top: 38px; bottom: 0; z-index: 30;
-    width: min(280px, 88vw); transform: translateX(-110%); transition: transform .2s; }
+  .chat-layout { flex-direction: column; position: relative; background: #faf9f7; }
+  .mobile-chat-header { display: flex; align-items: center; flex-shrink: 0; gap: 8px; height: 68px; padding: 8px 12px;
+    background: #faf9f7; border-bottom: 1px solid #eeece9; }
+  .mobile-icon-button { font-family: inherit; display: flex; align-items: center; justify-content: center; width: 42px; height: 42px; flex-shrink: 0;
+    border: 0; border-radius: 14px; background: transparent; color: #464347; font-size: 21px; cursor: pointer; }
+  .mobile-icon-button:active { background: #eeeae8; }
+  .mobile-conversation-title { font-family: inherit; flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; border: 0; background: none; text-align: left; color: #302b30; cursor: pointer; }
+  .mobile-conversation-title img { width: 38px; height: 38px; object-fit: cover; border-radius: 50%; border: 2px solid #f1dce5; }
+  .mobile-conversation-title > span { min-width: 0; }
+  .mobile-conversation-title strong { display: flex; align-items: center; gap: 7px; font-size: 16px; font-weight: 600; }
+  .mobile-conversation-title strong .el-icon { font-size: 12px; color: #938b90; }
+  .mobile-conversation-title small { display: block; color: #a2959d; font-size: 10px; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chat-sidebar { position: absolute; left: 0; top: 0; bottom: 0; z-index: 30; border: 0; border-radius: 0 22px 22px 0;
+    width: min(310px, 86vw); transform: translateX(-110%); transition: transform .2s; background: #fff; box-shadow: 8px 0 30px #302b3010; }
   .chat-sidebar.mobile-open { transform: translateX(0); }
-  .sidebar-backdrop { display: block; position: absolute; inset: 38px 0 0; z-index: 29; border: 0; background: #0005; }
-  .chat-main { min-width: 0; min-height: 0; }
-  .chat-toolbar { margin: 0 8px; padding: 8px; gap: 8px; flex-wrap: wrap; }
-  .toolbar-left { flex-wrap: wrap; gap: 8px; }
-  .chat-messages { padding: 12px 8px; }
-  .persona-bar { padding: 8px; flex-wrap: wrap; }
-  .message-body { max-width: calc(100% - 44px); min-width: 0; }
-  .message-bubble { max-width: 100%; }
-  .chat-input-area { padding: 8px 8px calc(40px + env(safe-area-inset-bottom)); flex-shrink: 0; }
-  .chat-input-wrapper { padding: 8px 10px; }
+  .sidebar-backdrop, .mobile-options-backdrop { display: block; position: absolute; inset: 0; z-index: 29; border: 0; background: #28212b45; backdrop-filter: blur(3px); }
+  .mobile-options-backdrop { z-index: 40; }
+  .mobile-connection-button { display: flex; width: 100%; margin: 6px 0 0; }
+  .sidebar-header { padding: 22px 16px 14px; }
+  .btn-new-chat { background: #f5e9ef; color: #97556f; border: 0; box-shadow: none; border-radius: 14px; }
+  .conversation-item { min-height: 58px; }
+  .chat-main, .chat-main.persona-theme { min-width: 0; min-height: 0; background: #faf9f7; }
+  .chat-content { min-height: 0; }
+  .persona-bar { display: none; }
+  .chat-toolbar { display: none; position: absolute; z-index: 41; bottom: 12px; left: 12px; right: 12px; margin: 0; padding: 16px 20px 20px;
+    gap: 16px; border: 1px solid #eee7eb; border-radius: 24px; box-shadow: 0 12px 48px #342a3926; max-height: calc(100% - 24px); overflow-y: auto; }
+  .chat-toolbar.mobile-open { display: flex; }
+  .mobile-options-heading { display: flex; align-items: center; justify-content: space-between; width: 100%; font-size: 17px; color: #3b333a; }
+  .toolbar-left { display: flex; width: 100%; flex-direction: column; align-items: stretch; gap: 18px; }
+  .toolbar-item { display: flex; justify-content: space-between; gap: 12px; }
+  .toolbar-label { font-size: 13px; color: #807780; }
+  .toolbar-select { width: min(200px, 65%); }
+  .toolbar-select :deep(.el-select__wrapper) { min-height: 40px; border-radius: 11px; }
+  .mode-toggle :deep(.el-radio-button__inner) { padding: 11px 18px; }
+  .toolbar-right { width: 100%; border-top: 1px solid #f0edf0; padding-top: 14px; }
+  .toolbar-right .el-button { width: 100%; min-height: 40px; border-radius: 12px; }
+  .chat-messages { padding: 24px 20px 8px; scroll-padding-bottom: 16px; }
+  .chat-message { margin-bottom: 30px; gap: 0; animation: none; }
+  .message-avatar { display: none; }
+  .message-body { max-width: 100%; min-width: 0; }
+  .message-role { font-size: 11px; color: #a18391; padding: 0; margin-bottom: 8px; }
+  .user .message-role { display: none; }
+  .user .message-body { max-width: 88%; }
+  .chat-message.assistant .message-bubble, .chat-main.persona-theme .assistant .message-bubble {
+    padding: 0; border: 0; background: transparent; box-shadow: none; border-radius: 0; }
+  .chat-message.user .message-bubble, .chat-main.persona-theme .user .message-bubble {
+    padding: 12px 16px; background: #f1e9ed; color: #44363e; border: 0; border-radius: 20px 20px 5px 20px; box-shadow: none; }
+  .message-bubble:hover { transform: none; }
+  .message-text :deep(.markdown-body) { font-size: 15px; line-height: 1.9; color: #353136; }
+  .chat-message.user .message-bubble :deep(.markdown-body) { color: #44363e; }
+  .message-actions { margin-top: 8px; }
+  .chat-input-area { padding: 10px 14px 12px; flex-shrink: 0; background: linear-gradient(#faf9f700, #faf9f7 20%); }
+  .chat-input-area:focus-within { padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+  .chat-input-wrapper, .chat-main.persona-theme .chat-input-wrapper { padding: 10px 10px 10px 16px; border-radius: 24px; border: 1px solid #e6e0e4; background: #fff; box-shadow: 0 3px 14px #382d3810; }
+  .chat-input-wrapper:focus-within, .chat-main.persona-theme .chat-input-wrapper:focus-within { border-color: #c6a0b2; box-shadow: 0 3px 16px #a2647d12; }
   .chat-textarea { min-width: 0; }
-  .btn-send, .btn-stop { width: 44px; height: 44px; }
+  .chat-textarea :deep(.el-textarea__inner) { height: 52px; min-height: 52px !important; line-height: 1.5; }
+  .chat-textarea :deep(.el-textarea__inner::placeholder) { font-size: 14px; color: #aaa0a6; }
+  .btn-send, .btn-stop, .chat-main.persona-theme .btn-send { width: 40px; height: 40px; border: 0; border-radius: 50%; background: #a66b83; box-shadow: none; }
+  .btn-send:disabled { background: #e9dfe4; color: #fff; }
+  .chat-empty { padding: 24px; text-align: center; }
+  .chat-empty .empty-icon { background: #f5e9ef; color: #a66b83; width: 72px; height: 72px; }
+  .chat-empty h2 { font-size: 25px; font-weight: 500; color: #393239; }
+  .chat-empty p { font-size: 13px; line-height: 1.8; }
+  .btn-start { background: #a66b83; border: 0; box-shadow: none; }
 }
 </style>

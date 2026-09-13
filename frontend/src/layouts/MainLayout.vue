@@ -1,5 +1,5 @@
 <template>
-  <el-container class="main-layout" :style="mobileViewportStyle">
+  <el-container class="main-layout" :class="{ 'mobile-chat-page': route.path === '/chat' }" :style="mobileViewportStyle">
     <el-header class="header">
       <div class="header-left">
         <div class="logo" @click="$router.push('/')">
@@ -60,6 +60,12 @@
     <el-main class="main-content">
       <router-view />
     </el-main>
+    <nav class="mobile-tabbar" aria-label="主要导航">
+      <router-link to="/chat" :class="{ active: activeMenu === '/chat' }"><el-icon><ChatDotRound /></el-icon><span>对话</span></router-link>
+      <router-link to="/forum" :class="{ active: activeMenu === '/forum' }"><el-icon><ChatLineSquare /></el-icon><span>社区</span></router-link>
+      <router-link to="/knowledge-bases" :class="{ active: activeMenu === '/knowledge-bases' }"><el-icon><Collection /></el-icon><span>小说库</span></router-link>
+      <router-link to="/user/profile" :class="{ active: activeMenu === '/user/profile' }"><el-icon><User /></el-icon><span>我的</span></router-link>
+    </nav>
   </el-container>
 </template>
 
@@ -249,14 +255,22 @@ const handleLogout = async () => {
   padding: 0;
 }
 
+.mobile-tabbar { display: none; }
 @media (max-width: 900px) {
-  .header { padding: 0 8px; gap: 4px; }
-  .logo-text, .username, .arrow-icon, .btn-register { display: none; }
+  .main-layout { background: #faf9f7; padding-top: env(safe-area-inset-top); padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
+  .header { padding: 0 20px; gap: 12px; height: 60px; background: #faf9f7; box-shadow: none; border: 0; }
+  .header-menu, .username, .arrow-icon, .btn-register { display: none; }
+  .mobile-chat-page > .header { display: none; }
   .logo-img { width: 28px; height: 28px; }
-  .header-menu { min-width: 0; }
-  .header-menu :deep(.el-menu-item) { padding: 0 7px; font-size: 12px; }
-  .header-menu :deep(.el-icon) { margin-right: 3px; width: 16px; }
+  .logo-text { font-size: 17px; color: #303235; letter-spacing: -.4px; }
   .user-info { padding: 0; }
   .header-right { gap: 0; flex-shrink: 0; }
+  .mobile-tabbar { display: flex; flex-shrink: 0; justify-content: space-around; padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+    background: #fff; border-top: 1px solid #eeece9; }
+  .mobile-tabbar a { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+    min-width: 64px; min-height: 44px; text-decoration: none; color: #91908f; font-size: 10px; font-weight: 500; border-radius: 14px; }
+  .mobile-tabbar .el-icon { font-size: 21px; }
+  .mobile-tabbar a.active { color: #a55d7a; background: #fcf0f5; }
+  .mobile-chat-page:has(.chat-textarea textarea:focus) .mobile-tabbar { display: none; }
 }
 </style>

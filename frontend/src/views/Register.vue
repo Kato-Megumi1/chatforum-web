@@ -192,5 +192,9 @@ const handleRegister = async () => {
   .register-container { min-height: 100svh; height: auto; padding: 24px 16px 56px; justify-content: center; }
   .register-card { width: min(420px, 100%); padding: 28px 24px; }
   :deep(.el-input__inner) { font-size: 16px; }
+  .register-card { border-radius: 26px; box-shadow: 0 12px 50px #38253626; }
+  .register-card :deep(.el-input__wrapper) { min-height: 44px; border-radius: 12px; }
+  .register-card :deep(.el-button--primary) { min-height: 46px; border-radius: 14px; background: #a66b83; border: 0; }
+  .register-footer a { color: #a66b83; }
 }
 </style>

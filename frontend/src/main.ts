@@ -3,7 +3,7 @@ import { createPinia } from 'pinia';
 import piniaPluginPersistedstate from 'pinia-plugin-persistedstate';
 import ElementPlus from 'element-plus';
 import 'element-plus/dist/index.css';
-import { ArrowDown, ChatDotRound, ChatLineSquare, Collection, Delete, Document, DocumentCopy, Edit,
+import { ArrowDown, ChatDotRound, ChatLineSquare, Close, Collection, Connection, Delete, Document, DocumentCopy, Edit, EditPen, Expand,
   MagicStick, MoreFilled, Plus, Promotion, Service, Setting, Star, SwitchButton, Top, User, VideoPause, View } from '@element-plus/icons-vue';
 import { marked } from 'marked';
 import App from './App.vue';
@@ -23,7 +23,7 @@ app.use(pinia);
 app.use(router);
 app.use(ElementPlus);
 
-for (const [key, component] of Object.entries({ ArrowDown, ChatDotRound, ChatLineSquare, Collection, Delete, Document, DocumentCopy, Edit,
+for (const [key, component] of Object.entries({ ArrowDown, ChatDotRound, ChatLineSquare, Close, Collection, Connection, Delete, Document, DocumentCopy, Edit, EditPen, Expand,
   MagicStick, MoreFilled, Plus, Promotion, Service, Setting, Star, SwitchButton, Top, User, VideoPause, View })) {
   app.component(key, component);
 }

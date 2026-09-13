@@ -3,6 +3,7 @@
     <div class="profile-wrapper">
       <el-page-header @back="$router.back()" title="返回" class="page-header" />
       <div class="profile-main" v-if="userStore.user">
+        <el-button class="mobile-profile-connection" plain @click="openConnection"><el-icon><Connection /></el-icon>后端连接设置</el-button>
         <div class="profile-card">
           <div class="avatar-section">
             <input
@@ -78,6 +79,7 @@
 </template>
 
 <script setup lang="ts">
+const openConnection = () => window.dispatchEvent(new Event('chatforum:connection-settings'));
 import { apiUrl, normalizeMedia } from '@/utils/api';
 import { ref, reactive, onMounted } from 'vue';
 import { ElMessage } from 'element-plus';
@@ -316,7 +318,11 @@ onMounted(() => {
   font-size: 14px;
   color: var(--text-secondary);
 }
-@media (max-width: 640px) {
+.mobile-profile-connection { display: none; }
+@media (max-width: 900px) {
+  .profile-container { background: #faf9f7; }
+  .profile-main { border: 1px solid #eee7eb; border-radius: 20px; box-shadow: none; }
+  .mobile-profile-connection { display: flex; margin-bottom: 20px; border-radius: 12px; }
   .profile-wrapper { padding: 16px 12px 48px; }
   .profile-main { padding: 20px 16px; }
   .profile-card { flex-wrap: wrap; gap: 16px; }

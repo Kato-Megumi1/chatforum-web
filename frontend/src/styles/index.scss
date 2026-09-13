@@ -14,9 +14,21 @@ html, body {
 }
 
 @media (max-width: 900px) {
+  :root {
+    --el-color-primary: #a66b83;
+    --el-color-primary-light-3: #bf94a6;
+    --el-color-primary-light-5: #d2b1bf;
+    --el-color-primary-light-7: #e5cfd9;
+    --el-color-primary-light-9: #fbf0f5;
+    --el-color-primary-dark-2: #8b536a;
+  }
   // Avoid iOS auto-zoom when focusing a form or the chat composer.
   .el-input__inner, .el-textarea__inner { font-size: 16px !important; }
   .el-message-box { max-width: calc(100vw - 24px); }
+  .el-dialog { border-radius: 22px; padding: 22px; }
+  .el-drawer { border-radius: 22px 0 0 22px; }
+  .el-button, .el-input__wrapper, .el-select__wrapper { border-radius: 10px; }
+  .markdown-body table { display: block; max-width: 100%; overflow-x: auto; }
 }
 
 :root {
@@ -126,13 +138,11 @@ html, body {
   }
 
   table {
-    display: block;
-    max-width: 100%;
-    overflow-x: auto;
     width: 100%;
     border-collapse: collapse;
     margin: 14px 0;
     border-radius: var(--radius-sm);
+    overflow: hidden;
 
     th, td {
       padding: 10px 14px;
