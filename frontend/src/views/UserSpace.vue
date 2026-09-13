@@ -189,4 +189,11 @@ onMounted(() => {
 .empty-state {
   padding: 48px 0 16px;
 }
+@media (max-width: 640px) {
+  .user-space-wrapper { padding: 16px 12px 48px; }
+  .user-space-main { padding: 20px 16px; }
+  .user-banner { flex-wrap: wrap; gap: 16px; }
+  .banner-info { flex-basis: 150px; overflow-wrap: anywhere; }
+  .space-badges { flex-wrap: wrap; }
+}
 </style>

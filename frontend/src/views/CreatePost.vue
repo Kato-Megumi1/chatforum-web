@@ -15,7 +15,7 @@
             />
           </el-form-item>
           <el-row :gutter="16">
-            <el-col :span="12">
+            <el-col :xs="24" :sm="12">
               <el-form-item label="分类">
                 <el-select v-model="form.categoryId" placeholder="请选择分类" size="large" style="width: 100%">
                   <el-option
@@ -27,7 +27,7 @@
                 </el-select>
               </el-form-item>
             </el-col>
-            <el-col :span="12">
+            <el-col :xs="24" :sm="12">
               <el-form-item label="标签">
                 <el-select
                   v-model="form.tags"
@@ -188,6 +188,7 @@ onMounted(() => {
 
 .form-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
 }
 
@@ -199,5 +200,9 @@ onMounted(() => {
     transform: translateY(-1px);
     box-shadow: 0 6px 20px rgba(22, 93, 255, 0.4);
   }
+}
+@media (max-width: 640px) {
+  .create-post-wrapper { padding: 16px 12px 48px; }
+  .create-post-main { padding: 20px 16px; }
 }
 </style>

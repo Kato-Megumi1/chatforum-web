@@ -301,6 +301,8 @@ onMounted(() => {
 
 .security-info {
   flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .security-label {
@@ -313,5 +315,13 @@ onMounted(() => {
 .security-value {
   font-size: 14px;
   color: var(--text-secondary);
+}
+@media (max-width: 640px) {
+  .profile-wrapper { padding: 16px 12px 48px; }
+  .profile-main { padding: 20px 16px; }
+  .profile-card { flex-wrap: wrap; gap: 16px; }
+  .info-section { flex-basis: 150px; overflow-wrap: anywhere; }
+  .user-badges { flex-wrap: wrap; }
+  .security-item { gap: 12px; }
 }
 </style>

@@ -1,5 +1,5 @@
 <template>
-  <el-container class="main-layout">
+  <el-container class="main-layout" :style="mobileViewportStyle">
     <el-header class="header">
       <div class="header-left">
         <div class="logo" @click="$router.push('/')">
@@ -69,6 +69,9 @@ import { computed } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useUserStore } from '@/stores/user';
+import { useMobileViewport } from '@/composables/useMobileViewport';
+
+const mobileViewportStyle = useMobileViewport();
 
 const router = useRouter();
 const route = useRoute();
@@ -240,12 +243,13 @@ const handleLogout = async () => {
 
 .main-content {
   flex: 1;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
   padding: 0;
 }
 
-@media (max-width: 640px) {
-  .main-layout { height: 100dvh; }
+@media (max-width: 900px) {
   .header { padding: 0 8px; gap: 4px; }
   .logo-text, .username, .arrow-icon, .btn-register { display: none; }
   .logo-img { width: 28px; height: 28px; }

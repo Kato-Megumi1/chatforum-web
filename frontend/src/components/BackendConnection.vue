@@ -43,4 +43,6 @@ function save() {
   location.reload();
 }
 </script>
-<style scoped>.connection { position: fixed; right: 12px; bottom: 8px; z-index: 1500; background: white; border-radius: 8px; opacity: .95; }</style>
+<style scoped>
+.connection { position: fixed; right: 12px; bottom: max(8px, env(safe-area-inset-bottom)); z-index: 1500; background: white; border-radius: 8px; opacity: .95; }
+</style>

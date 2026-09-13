@@ -113,6 +113,7 @@
             v-model:page-size="pageSize"
             :total="total"
             :page-sizes="[10, 20, 50]"
+            :pager-count="5"
             layout="total, sizes, prev, pager, next, jumper"
             @current-change="loadPosts"
             @size-change="loadPosts"
@@ -404,6 +405,7 @@ onUnmounted(() => {
 }
 
 .post-title {
+  overflow-wrap: anywhere;
   font-size: 16px;
   font-weight: 600;
   color: var(--text-primary);
@@ -459,5 +461,33 @@ onUnmounted(() => {
   display: flex;
   justify-content: center;
   margin-top: 28px;
+}
+
+@media (max-width: 1100px) {
+  .content-toolbar { flex-wrap: wrap; }
+  .search-input { flex-basis: 100%; max-width: none; }
+  .post-card-footer { flex-wrap: wrap; gap: 12px; }
+  .post-stats { flex-wrap: wrap; gap: 12px; }
+  .pagination-wrapper :deep(.el-pagination__sizes),
+  .pagination-wrapper :deep(.el-pagination__jump) { display: none; }
+}
+
+@media (max-width: 900px) {
+  .forum-hero { padding: 20px; gap: 16px; flex-wrap: wrap; }
+  .forum-main { flex-direction: column; padding: 16px 16px 48px; gap: 16px; }
+  .forum-sidebar { width: 100%; gap: 12px; }
+  .sidebar-card { padding: 12px; }
+  .category-list { display: flex; flex-wrap: wrap; gap: 4px; }
+  .category-item { gap: 10px; min-height: 40px; }
+  .post-author { min-width: 0; }
+  .author-name { overflow-wrap: anywhere; }
+}
+
+@media (max-width: 640px) {
+  .forum-main { padding-inline: 12px; }
+  .forum-hero { padding: 18px 16px; }
+  .forum-hero p { line-height: 1.6; }
+  .post-card { padding: 16px; }
+  .pagination-wrapper :deep(.el-pagination__total) { display: none; }
 }
 </style>

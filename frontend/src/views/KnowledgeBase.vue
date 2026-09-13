@@ -228,7 +228,7 @@ onUnmounted(() => clearInterval(timer));
 .heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 .heading h2 { margin-bottom: 6px; }
 .heading p, .book p { color: #677387; line-height: 1.7; }
-.book { margin: 20px 0; }
+.book { margin: 20px 0; min-width: 0; overflow-wrap: anywhere; }
 .badges, .actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 12px 0; }
 .passage { padding: 16px 0; border-bottom: 1px solid #e7eaf0; }
 .passage p { white-space: pre-wrap; }

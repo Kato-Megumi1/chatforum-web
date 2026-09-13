@@ -189,8 +189,8 @@
               v-model="inputText"
               type="textarea"
               :rows="3"
-              placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
-              @keydown.enter.prevent="handleKeyDown"
+              :placeholder="messagePlaceholder"
+              @keydown.enter="handleKeyDown"
               :disabled="chatStore.isStreaming"
               class="chat-textarea"
             />
@@ -199,6 +199,7 @@
               type="danger"
               circle
               class="btn-stop"
+              aria-label="停止生成"
               @click="handleStopGeneration"
             >
               <el-icon><VideoPause /></el-icon>
@@ -208,6 +209,7 @@
               type="primary"
               :disabled="!inputText.trim()"
               class="btn-send"
+              aria-label="发送消息"
               @click="handleSendMessage"
             >
               <el-icon><Promotion /></el-icon>
@@ -252,7 +254,7 @@
           description="提问与相关原文片段会发送给所选模型的服务商；小说正文不会获得工具权限。不会自动改用其他模型。" />
       </el-form>
     </el-drawer>
-    <el-dialog v-model="showRenameDialog" title="重命名对话" width="400px" class="rename-dialog">
+    <el-dialog v-model="showRenameDialog" title="重命名对话" width="min(400px, 95vw)" class="rename-dialog">
       <el-input v-model="renameTitle" placeholder="请输入新标题" size="large" />
       <template #footer>
         <el-button @click="showRenameDialog = false">取消</el-button>
@@ -282,6 +284,9 @@ const userStore = useUserStore();
 const messagesRef = ref<HTMLElement>();
 const scrollAnchor = ref<HTMLElement>();
 const inputText = ref('');
+const messagePlaceholder = window.matchMedia('(pointer: coarse)').matches
+  ? '输入消息… 回车换行，点箭头发送'
+  : '输入消息… (Enter 发送, Shift+Enter 换行)';
 const showSettings = ref(false);
 const showRenameDialog = ref(false);
 const renameTitle = ref('');
@@ -549,7 +554,12 @@ const buildCustomSystemPrompt = () => {
 回复时使用简体中文。`;
 };
 
-const handleKeyDown = () => {
+const handleKeyDown = (event: KeyboardEvent) => {
+  // IME confirmation and Shift+Enter belong to the editor, not the send action.
+  if (event.isComposing || event.keyCode === 229 || event.shiftKey) return;
+  // A touch keyboard's return key should insert a newline; use the send button.
+  if (window.matchMedia('(pointer: coarse)').matches) return;
+  event.preventDefault();
   handleSendMessage();
 };
 
@@ -1582,7 +1592,7 @@ onMounted(async () => {
 }
 
 .mobile-conversations, .sidebar-backdrop { display: none; }
-@media (max-width: 640px) {
+@media (max-width: 900px) {
   .chat-layout { flex-direction: column; position: relative; }
   .mobile-conversations { display: block; margin: 4px 8px; align-self: flex-start; min-height: 30px; }
   .chat-sidebar { position: absolute; left: 0; top: 38px; bottom: 0; z-index: 30;
@@ -1596,5 +1606,9 @@ onMounted(async () => {
   .persona-bar { padding: 8px; flex-wrap: wrap; }
   .message-body { max-width: calc(100% - 44px); min-width: 0; }
   .message-bubble { max-width: 100%; }
+  .chat-input-area { padding: 8px 8px calc(40px + env(safe-area-inset-bottom)); flex-shrink: 0; }
+  .chat-input-wrapper { padding: 8px 10px; }
+  .chat-textarea { min-width: 0; }
+  .btn-send, .btn-stop { width: 44px; height: 44px; }
 }
 </style>

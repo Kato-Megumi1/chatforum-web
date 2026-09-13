@@ -13,6 +13,12 @@ html, body {
   scroll-behavior: smooth;
 }
 
+@media (max-width: 900px) {
+  // Avoid iOS auto-zoom when focusing a form or the chat composer.
+  .el-input__inner, .el-textarea__inner { font-size: 16px !important; }
+  .el-message-box { max-width: calc(100vw - 24px); }
+}
+
 :root {
   --primary-color: #4A9EDC;
   --primary-light: #7EC8F5;
@@ -58,6 +64,8 @@ html, body {
 }
 
 .markdown-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-size: 14px;
   line-height: 1.8;
   color: var(--text-regular);
@@ -118,11 +126,13 @@ html, body {
   }
 
   table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
     width: 100%;
     border-collapse: collapse;
     margin: 14px 0;
     border-radius: var(--radius-sm);
-    overflow: hidden;
 
     th, td {
       padding: 10px 14px;

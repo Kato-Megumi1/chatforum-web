@@ -171,7 +171,7 @@ h1 { font-size: 27px; line-height: 1.5; margin: 12px 0 18px; overflow-wrap: anyw
 .post-content { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.95; padding: 28px 0; font-size: 15px; }
 .post-actions { padding: 24px 0 4px; }
 .discussion { border-top: 1px solid var(--border-light); margin-top: 32px; padding-top: 20px; }
-.discussion-heading, .composer-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.discussion-heading, .composer-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 h2 { font-size: 19px; margin: 0; } h2 span { font-size: 12px; background: #f0f4f9; padding: 3px 8px; border-radius: 12px; margin-left: 6px; }
 .hint { margin: 12px 0 20px; }
 .composer { padding: 16px; background: #f7f9fc; border-radius: 14px; }
@@ -185,5 +185,7 @@ h2 { font-size: 19px; margin: 0; } h2 span { font-size: 12px; background: #f0f4f
 .reply { padding: 12px 0; border-bottom: 1px solid #e8edf4; font-size: 13px; } .reply:last-child { border: none; }
 .reply-date { margin-left: 10px; } .reply-composer { margin-top: 12px; }
 .pagination { margin-top: 24px; justify-content: center; }
+.comment-meta strong, .reply strong, .post-meta strong { overflow-wrap: anywhere; min-width: 0; }
+.comment-body :deep(.el-pagination) { flex-wrap: wrap; }
 @media (max-width: 600px) { .post-wrapper { padding: 16px 12px 32px; } .post-card { padding: 22px 16px; border-radius: 14px; } h1 { font-size: 22px; } .composer { padding: 12px; } .composer-actions span { max-width: 100px; } }
 </style>
