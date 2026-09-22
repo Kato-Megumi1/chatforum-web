@@ -8,7 +8,10 @@ export function resolveForumLinks(sanitizedHtml: string, resolve: (path: string)
   fragment.innerHTML = sanitizedHtml;
   fragment.content.querySelectorAll('a[href]').forEach(link => {
     const path = forumPostPath(link.getAttribute('href') || '');
-    if (path) link.setAttribute('href', resolve(path));
+    if (path) {
+      link.setAttribute('href', resolve(path));
+      link.setAttribute('data-forum-post-path', path);
+    }
   });
   return fragment.innerHTML;
 }

@@ -21,7 +21,7 @@ const routes: RouteRecordRaw[] = [
     children: [
       {
         path: '',
-        redirect: '/chat',
+        redirect: '/forum',
       },
       {
         path: 'chat',
@@ -81,7 +81,7 @@ router.beforeEach((to, _from, next) => {
   if (to.meta.requiresAuth && !isAuthenticated) {
     next('/login');
   } else if ((to.path === '/login' || to.path === '/register') && isAuthenticated) {
-    next('/chat');
+    next('/forum');
   } else {
     next();
   }

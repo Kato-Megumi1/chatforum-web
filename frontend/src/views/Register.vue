@@ -134,7 +134,7 @@ const handleRegister = async () => {
     await formRef.value.validate();
     await userStore.register(form.email, form.username, form.password, normalizeRegistrationPhone(form.phone));
     ElMessage.success('注册成功');
-    router.push('/chat');
+    router.replace('/forum');
   } catch (error) {
     // Error already handled
   } finally {

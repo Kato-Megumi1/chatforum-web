@@ -79,7 +79,7 @@ const handleLogin = async () => {
     loading.value = true;
     await userStore.login(form.email, form.password);
     ElMessage.success('登录成功');
-    router.push('/chat');
+    router.replace('/forum');
   } catch (error) {
     // Error already handled
   } finally {

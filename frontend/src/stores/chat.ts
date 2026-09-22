@@ -2,6 +2,7 @@ import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import request from '@/utils/request';
 import { watchChatRun } from '@/utils/chat-stream';
+import { CHAT_NAVIGATION_KEY, emptyChatNavigation, readChatNavigation, type ChatSpace } from '@/utils/chat-navigation';
 
 interface Conversation { id: number; title: string; isPinned: boolean; userId: number; createdAt: string; updatedAt: string;
   conversationType: 'ASSISTANT' | 'ROLEPLAY' | 'LEGACY'; personaKey?: string; personaLabel?: string;
@@ -33,13 +34,38 @@ export const useChatStore = defineStore('chat', () => {
   const pendingReply = ref<Message | null>(null);
   const pendingQuestion = ref<Message | null>(null);
   let selection = 0;
+  let identityEpoch = 0;
+  const navigation = ref(emptyChatNavigation(0));
+  const drafts = ref<Record<number, string>>({}); // In-memory only; never persist message/draft contents in navigation storage.
+  const isLoadingConversation = ref(false);
+  const persistNavigation = () => {
+    if (!navigation.value.userId) return;
+    try { sessionStorage.setItem(CHAT_NAVIGATION_KEY, JSON.stringify(navigation.value)); } catch { /* In-memory restoration still works. */ }
+  };
+  const initializeNavigation = (userId: number) => {
+    if (navigation.value.userId === userId) return;
+    try { navigation.value = readChatNavigation(sessionStorage.getItem(CHAT_NAVIGATION_KEY), userId); }
+    catch { navigation.value = emptyChatNavigation(userId); }
+  };
+  const setSpace = (space: ChatSpace) => { navigation.value.space = space; persistNavigation(); };
+  const saveView = (id: number, scroll: number, draft: string) => {
+    navigation.value.scroll[id] = Math.max(0, scroll); drafts.value[id] = draft;
+    const keys = Object.keys(navigation.value.scroll);
+    if (keys.length > 100) for (const key of keys.filter(k => Number(k) !== id).slice(0, keys.length - 100)) {
+      delete navigation.value.scroll[Number(key)]; delete drafts.value[Number(key)];
+    }
+    persistNavigation();
+  };
 
   const getConversationSettings = (id: number): ConversationSettings => conversationSettings.value[id] ||= {
     agentMode: 'normal', selectedPersona: '', customPersonaName: '', customPersonaPrompt: '', knowledgeBaseId: 0,
   };
   const saveConversationSettings = (id: number, settings: Partial<ConversationSettings>) =>
     Object.assign(getConversationSettings(id), settings);
-  const loadConversations = async () => { conversations.value = await request.get('/chat/conversations'); };
+  const loadConversations = async () => {
+    const epoch = identityEpoch, data = await request.get<Conversation[]>('/chat/conversations');
+    if (epoch === identityEpoch) conversations.value = data;
+  };
   const loadDefaultConfig = async () => {
     const data = await request.get('/chat/config');
     llmConfig.value = { configured: data.configured, model: data.model, defaultModelId: data.defaultModelId || '', models: data.models || [] };
@@ -54,7 +80,10 @@ export const useChatStore = defineStore('chat', () => {
     conversations.value = conversations.value.map(c => c.id === id ? updated : c);
     if (currentConversation.value?.id === id) currentConversation.value = updated;
   };
-  const clearSelection = () => { ++selection; currentConversation.value = null; messages.value = []; };
+  const clearSelection = () => {
+    ++selection; currentConversation.value = null; messages.value = []; isLoadingConversation.value = false;
+    navigation.value.conversationId = null; persistNavigation();
+  };
   const updateConversation = async (id: number, data: Partial<Conversation>) => {
     const updated = await request.put<Conversation>('/chat/conversations/' + id, data);
     conversations.value = conversations.value.map(c => c.id === id ? updated : c);
@@ -62,8 +91,12 @@ export const useChatStore = defineStore('chat', () => {
   };
   const selectConversation = async (conversation: Conversation) => {
     const stamp = ++selection;
+    isLoadingConversation.value = true;
+    try {
     const changed = currentConversation.value?.id !== conversation.id;
     currentConversation.value = conversation;
+    navigation.value.space = conversation.conversationType || 'LEGACY';
+    navigation.value.conversationId = conversation.id; persistNavigation();
     if (changed) messages.value = [];
     const data = await request.get<Message[]>('/chat/conversations/' + conversation.id + '/messages');
     let appendPending = pendingReply.value?.conversationId === conversation.id;
@@ -76,6 +109,7 @@ export const useChatStore = defineStore('chat', () => {
       if (appendPending && pendingQuestion.value && pendingReply.value)
         messages.value.push(pendingQuestion.value, pendingReply.value);
     }
+    } finally { if (stamp === selection) isLoadingConversation.value = false; }
   };
   const stopGeneration = () => {
     abortController.value?.abort();
@@ -87,7 +121,8 @@ export const useChatStore = defineStore('chat', () => {
     await request.delete('/chat/conversations/' + id);
     conversations.value = conversations.value.filter(c => c.id !== id);
     delete conversationSettings.value[id];
-    if (currentConversation.value?.id === id) { ++selection; currentConversation.value = null; messages.value = []; }
+    delete navigation.value.scroll[id]; delete drafts.value[id];
+    if (currentConversation.value?.id === id) clearSelection(); else persistNavigation();
   };
   const deleteMessage = async (id: number) => {
     if (!currentConversation.value || isStreaming.value) return;
@@ -143,6 +178,8 @@ export const useChatStore = defineStore('chat', () => {
   const sendMessage = (question: string, onStream?: (text: string) => void) =>
     send(question, 'normal', [], undefined, undefined, undefined, onStream);
   const resetForUser = () => {
+    identityEpoch++; navigation.value = emptyChatNavigation(0); drafts.value = {}; isLoadingConversation.value = false;
+    try { sessionStorage.removeItem(CHAT_NAVIGATION_KEY); } catch { /* Storage may be blocked. */ }
     selection++; abortController.value?.abort(); activeRun = null;
     pendingReply.value = null; pendingQuestion.value = null;
     conversations.value = []; currentConversation.value = null; messages.value = [];
@@ -154,6 +191,7 @@ export const useChatStore = defineStore('chat', () => {
     send(question, 'agent', enabledSkills, persona, customSystemPrompt, knowledgeBaseId, onStream);
 
   return { conversations, currentConversation, messages, llmConfig, preferredModelId, isStreaming, conversationSettings,
+    navigation, drafts, isLoadingConversation, initializeNavigation, setSpace, saveView,
     getConversationSettings, saveConversationSettings, loadConversations, loadDefaultConfig,
     createConversation, configureIdentity, clearSelection, updateConversation, deleteConversation, deleteMessage, selectConversation,
     sendMessage, sendMessageAgent, sendConfigured: send, stopGeneration, abortController, resetForUser };

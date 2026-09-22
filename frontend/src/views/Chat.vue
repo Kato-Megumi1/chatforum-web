@@ -143,7 +143,7 @@
           <el-input v-model="customPersonaName" placeholder="角色名称" size="small" class="custom-name" :disabled="chatStore.messages.length > 0" />
           <el-input v-model="customPersonaPrompt" type="textarea" :rows="2" placeholder="自定义系统提示词..." size="small" class="custom-prompt" :disabled="chatStore.messages.length > 0" />
         </div>
-        <div class="chat-messages" ref="messagesRef">
+      <div class="chat-messages" ref="messagesRef" @click="openForumPost">
           <div
             v-for="(msg, idx) in chatStore.messages"
             :key="msg.id || idx"
@@ -288,10 +288,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick, watch } from 'vue';
+import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { marked } from 'marked';
-import { resolveForumLinks } from '@/utils/forum-links';
+import { forumPostPath, resolveForumLinks } from '@/utils/forum-links';
+import { initialChat, type ChatSpace } from '@/utils/chat-navigation';
 import DOMPurify from 'dompurify';
 import RagEvidence from '@/components/RagEvidence.vue';
 import { publicAsset, CONNECTION_SETTINGS_ENABLED } from '@/utils/api';
@@ -299,7 +300,7 @@ import { useChatStore } from '@/stores/chat';
 import { useUserStore } from '@/stores/user';
 import dayjs from 'dayjs';
 import request from '@/utils/request';
-import { useRoute, useRouter } from 'vue-router';
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 
 const chatStore = useChatStore();
 const router = useRouter(), route = useRoute();
@@ -307,6 +308,10 @@ const mobileSidebar = ref(false);
 const mobileOptions = ref(false);
 const openConnection = () => { window.dispatchEvent(new Event('chatforum:connection-settings')); mobileSidebar.value = false; };
 const userStore = useUserStore();
+const ownerId = userStore.user!.id;
+chatStore.initializeNavigation(ownerId);
+let viewActive = true, initializing = true, restoring = true;
+const ownsView = () => viewActive && userStore.user?.id === ownerId && chatStore.navigation.userId === ownerId;
 const messagesRef = ref<HTMLElement>();
 const scrollAnchor = ref<HTMLElement>();
 const inputText = ref('');
@@ -322,19 +327,22 @@ const enabledSkills = ref<string[]>([]);
 const knowledgeBases = ref<any[]>([]);
 const knowledgeLoading = ref(false), knowledgeError = ref('');
 const clickedMsgId = ref<number | null>(null);
-const activeSpace = ref<'ASSISTANT' | 'ROLEPLAY' | 'LEGACY'>('ASSISTANT');
+const activeSpace = computed({ get: () => chatStore.navigation.space, set: (space: ChatSpace) => chatStore.setSpace(space) });
 const hasLegacy = computed(() => chatStore.conversations.some(c => !c.conversationType || c.conversationType === 'LEGACY'));
 const isLegacy = computed(() => !!chatStore.currentConversation && (!chatStore.currentConversation.conversationType || chatStore.currentConversation.conversationType === 'LEGACY'));
 const visibleConversations = computed(() => chatStore.conversations.filter(c => (c.conversationType || 'LEGACY') === activeSpace.value));
 const switchSpace = async (space: 'ASSISTANT' | 'ROLEPLAY' | 'LEGACY') => {
+  saveView();
   activeSpace.value = space;
   const target = chatStore.conversations.find(c => (c.conversationType || 'LEGACY') === space);
   try { if (target) await chatStore.selectConversation(target); else chatStore.clearSelection(); }
   catch (e: any) { ElMessage.error(e.message || '会话加载失败，请重试'); }
 };
-watch(() => chatStore.currentConversation?.id, () => {
+watch(() => chatStore.currentConversation?.id, (id, previousId) => {
+  saveView(previousId);
   if (chatStore.currentConversation) activeSpace.value = chatStore.currentConversation.conversationType || 'LEGACY';
-});
+  inputText.value = id ? chatStore.drafts[id] || '' : '';
+}, { flush: 'sync' });
 const toggleSharedMemory = async (value: boolean | string | number) => {
   if (!chatStore.currentConversation) return;
   try { await chatStore.updateConversation(chatStore.currentConversation.id, { sharedMemory: value === true }); }
@@ -470,9 +478,41 @@ const aiDisplayName = computed(() => {
 
 const scrollToBottom = () => {
   nextTick(() => {
-    scrollAnchor.value?.scrollIntoView({ behavior: 'smooth' });
+    if (ownsView()) messagesRef.value?.scrollTo({ top: messagesRef.value.scrollHeight, behavior: 'smooth' });
   });
 };
+
+// Restore navigation, not a new chat identity. Only IDs/positions go into tab-scoped storage.
+function saveView(id = chatStore.currentConversation?.id) {
+  if (!ownsView() || initializing || restoring || !id || !messagesRef.value || !chatStore.conversations.some(c => c.id === id)) return;
+  chatStore.saveView(id, messagesRef.value.scrollTop, inputText.value);
+}
+async function restoreView() {
+  const id = chatStore.currentConversation?.id;
+  await nextTick();
+  if (!ownsView() || id !== chatStore.currentConversation?.id || chatStore.isLoadingConversation) return;
+  const container = messagesRef.value;
+  if (container) container.scrollTo({ top: (id ? chatStore.navigation.scroll[id] : undefined) ?? container.scrollHeight, behavior: 'instant' });
+  restoring = false;
+}
+watch(() => chatStore.isLoadingConversation, loading => {
+  if (loading) { saveView(); restoring = true; }
+  else if (!initializing) void restoreView();
+}, { flush: 'sync' });
+
+function openForumPost(event: MouseEvent) {
+  if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+  const link = event.target instanceof Element ? event.target.closest<HTMLAnchorElement>('a[data-forum-post-path]') : null;
+  if (!link || link.hasAttribute('download') || (link.target && link.target !== '_self')) return;
+  const path = forumPostPath(link.dataset.forumPostPath || '');
+  if (!path || link.href !== new URL(router.resolve(path).href, location.href).href) return;
+  event.preventDefault();
+  saveView();
+  void router.push(path);
+}
+const onPageHide = () => saveView();
+onBeforeRouteLeave(() => { saveView(); });
+onBeforeUnmount(() => { saveView(); viewActive = false; window.removeEventListener('pagehide', onPageHide); });
 
 const renderMarkdown = (content: string) => {
   const safe = DOMPurify.sanitize(marked.parse(content, { async: false }) as string, { FORBID_TAGS: ['img', 'form', 'input'], FORBID_ATTR: ['style'] });
@@ -704,22 +744,36 @@ const toggleAllSkills = () => {
 
 watch(
   () => chatStore.messages,
-  () => scrollToBottom(),
+  () => {
+    const container = messagesRef.value;
+    if (ownsView() && !initializing && !restoring && !chatStore.isLoadingConversation && container &&
+      container.scrollHeight - container.scrollTop - container.clientHeight < 100) scrollToBottom();
+  },
   { deep: true }
 );
 
 onMounted(async () => {
-  await Promise.allSettled([chatStore.loadDefaultConfig(), loadSkills(), loadKnowledgeBases()]);
-  await chatStore.loadConversations();
-  if (chatStore.conversations.length > 0) {
-    await chatStore.selectConversation(chatStore.conversations[0]);
-  }
-  const requestedKb = Number(route.query.knowledgeBaseId);
-  if (requestedKb > 0) {
-    if (!chatStore.currentConversation) await chatStore.selectConversation(await chatStore.createConversation('知识库问答'));
-    selectedKnowledgeBaseId.value = requestedKb;
-    await router.replace({ path: '/chat', query: {} });
-  }
+  window.addEventListener('pagehide', onPageHide);
+  try {
+    await Promise.allSettled([chatStore.loadDefaultConfig(), loadSkills(), loadKnowledgeBases()]);
+    if (!ownsView()) return;
+    await chatStore.loadConversations();
+    if (!ownsView()) return;
+    const choice = initialChat(chatStore.conversations, chatStore.navigation);
+    activeSpace.value = choice.space;
+    if (choice.conversation) await chatStore.selectConversation(choice.conversation);
+    else chatStore.clearSelection();
+    if (!ownsView()) return;
+    inputText.value = chatStore.currentConversation ? chatStore.drafts[chatStore.currentConversation.id] || '' : '';
+    const requestedKb = Number(route.query.knowledgeBaseId);
+    if (requestedKb > 0) {
+      if (!chatStore.currentConversation || isLegacy.value) await chatStore.selectConversation(await chatStore.createConversation('知识库问答'));
+      if (!ownsView()) return;
+      selectedKnowledgeBaseId.value = requestedKb;
+      await router.replace({ path: '/chat', query: {} });
+    }
+  } catch (e: any) { if (ownsView()) ElMessage.error(e.message || '会话加载失败，请重试'); }
+  finally { if (ownsView()) { initializing = false; await restoreView(); } }
 });
 </script>
 
