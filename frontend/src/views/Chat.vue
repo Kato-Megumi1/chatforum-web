@@ -291,6 +291,7 @@
 import { ref, computed, onMounted, nextTick, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { marked } from 'marked';
+import { resolveForumLinks } from '@/utils/forum-links';
 import DOMPurify from 'dompurify';
 import RagEvidence from '@/components/RagEvidence.vue';
 import { publicAsset, CONNECTION_SETTINGS_ENABLED } from '@/utils/api';
@@ -474,7 +475,8 @@ const scrollToBottom = () => {
 };
 
 const renderMarkdown = (content: string) => {
-  return DOMPurify.sanitize(marked.parse(content, { async: false }) as string, { FORBID_TAGS: ['img', 'form', 'input'], FORBID_ATTR: ['style'] });
+  const safe = DOMPurify.sanitize(marked.parse(content, { async: false }) as string, { FORBID_TAGS: ['img', 'form', 'input'], FORBID_ATTR: ['style'] });
+  return resolveForumLinks(safe, path => router.resolve(path).href);
 };
 
 const formatTime = (time: string) => {
