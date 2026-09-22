@@ -14,6 +14,7 @@
         :rules="rules"
         label-position="top"
         size="large"
+        @submit.prevent="handleRegister"
       >
         <el-form-item label="邮箱" prop="email">
           <el-input v-model="form.email" placeholder="请输入邮箱" prefix-icon="Message" />
@@ -22,7 +23,7 @@
           <el-input v-model="form.username" placeholder="请输入用户名" prefix-icon="User" />
         </el-form-item>
         <el-form-item label="手机号" prop="phone">
-          <el-input v-model="form.phone" placeholder="请输入手机号（可选）" prefix-icon="Phone" />
+          <el-input v-model="form.phone" type="tel" inputmode="numeric" autocomplete="tel-national" placeholder="请输入11位手机号（可选）" prefix-icon="Phone" />
         </el-form-item>
         <el-form-item label="密码" prop="password">
           <el-input
@@ -31,6 +32,7 @@
             placeholder="请输入密码（至少6位）"
             prefix-icon="Lock"
             show-password
+            autocomplete="new-password"
           />
         </el-form-item>
         <el-form-item label="确认密码" prop="confirmPassword">
@@ -40,14 +42,14 @@
             placeholder="请再次输入密码"
             prefix-icon="Lock"
             show-password
-            @keyup.enter="handleRegister"
+            autocomplete="new-password"
           />
         </el-form-item>
         <el-form-item>
           <el-button
             type="primary"
             :loading="loading"
-            @click="handleRegister"
+            native-type="submit"
             style="width: 100%"
           >
             注册
@@ -64,7 +66,8 @@
 
 <script setup lang="ts">
 import { publicAsset } from '@/utils/api';
-import { reactive, ref } from 'vue';
+import { reactive, ref, watch } from 'vue';
+import { normalizeRegistrationPhone, registrationPhoneError, registrationPasswordError } from '@/utils/registration-validation';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
@@ -91,30 +94,45 @@ const validateConfirmPassword = (_rule: any, value: any, callback: any) => {
   }
 };
 
+watch(() => form.password, () => {
+  if (form.confirmPassword) void formRef.value?.validateField('confirmPassword').catch(() => undefined);
+});
+
 const rules: FormRules = {
   email: [
     { required: true, message: '请输入邮箱', trigger: 'blur' },
     { type: 'email', message: '请输入正确的邮箱格式', trigger: 'blur' },
+    { max: 191, message: '邮箱不能超过191个字符', trigger: 'blur' },
   ],
   username: [
     { required: true, message: '请输入用户名', trigger: 'blur' },
     { min: 3, message: '用户名至少3个字符', trigger: 'blur' },
+    { max: 30, message: '用户名不能超过30个字符', trigger: 'blur' },
   ],
+  phone: [{ validator: (_rule, value, callback) => {
+    const error = registrationPhoneError(value || '');
+    callback(error ? new Error(error) : undefined);
+  }, trigger: ['blur', 'change'] }],
   password: [
     { required: true, message: '请输入密码', trigger: 'blur' },
-    { min: 6, message: '密码至少6个字符', trigger: 'blur' },
+    { validator: (_rule, value, callback) => {
+      const error = registrationPasswordError(value || '');
+      callback(error ? new Error(error) : undefined);
+    }, trigger: ['blur', 'change'] },
   ],
   confirmPassword: [
     { required: true, message: '请再次输入密码', trigger: 'blur' },
-    { validator: validateConfirmPassword, trigger: 'blur' },
+    { validator: validateConfirmPassword, trigger: ['blur', 'change'] },
   ],
 };
 
 const handleRegister = async () => {
+  if (!formRef.value || loading.value) return;
+  // Lock before validation too: Enter and a rapid click must not create two requests.
+  loading.value = true;
   try {
-    await formRef.value?.validate();
-    loading.value = true;
-    await userStore.register(form.email, form.username, form.password, form.phone);
+    await formRef.value.validate();
+    await userStore.register(form.email, form.username, form.password, normalizeRegistrationPhone(form.phone));
     ElMessage.success('注册成功');
     router.push('/chat');
   } catch (error) {
