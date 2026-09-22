@@ -1,5 +1,5 @@
 <template>
-  <div class="register-container" :style="{ backgroundImage: 'url(' + publicAsset('auth-bg.png') + ')' }">
+  <div class="register-container" :style="{ backgroundImage: 'url(' + publicAsset('auth-bg-optimized.jpg') + ')' }">
     <div class="register-card">
       <div class="register-header">
         <el-icon :size="48" color="#165DFF">

@@ -8,9 +8,8 @@ class StreamAccessError extends Error {}
 
 export async function watchChatRun(id: string, signal: AbortSignal,
   onDelta: (text: string) => void): Promise<RunResult> {
-  const deadline = Date.now() + 12 * 60 * 1000;
   let offset = 0, failures = 0;
-  while (!signal.aborted && Date.now() < deadline) {
+  while (!signal.aborted) {
     const connection = new AbortController();
     const abort = () => connection.abort();
     signal.addEventListener('abort', abort, { once: true });
@@ -53,6 +52,5 @@ export async function watchChatRun(id: string, signal: AbortSignal,
       if (signal.aborted) finish();
     });
   }
-  if (signal.aborted) return { status: 'CANCELLED' };
-  throw new Error('等待超时，任务仍会保存，请稍后重新打开对话');
+  return { status: 'CANCELLED' };
 }

@@ -3,7 +3,9 @@ import { ref } from 'vue';
 import request from '@/utils/request';
 import { watchChatRun } from '@/utils/chat-stream';
 
-interface Conversation { id: number; title: string; isPinned: boolean; userId: number; createdAt: string; updatedAt: string }
+interface Conversation { id: number; title: string; isPinned: boolean; userId: number; createdAt: string; updatedAt: string;
+  conversationType: 'ASSISTANT' | 'ROLEPLAY' | 'LEGACY'; personaKey?: string; personaLabel?: string;
+  customPersonaPrompt?: string; sharedMemory?: boolean }
 interface Message { id: number; role: 'system' | 'user' | 'assistant'; content: string; reasoningContent?: string;
   ragMetadata?: any; conversationId: number; createdAt: string; pending?: boolean }
 interface ConversationSettings { agentMode: string; selectedPersona: string; customPersonaName: string;
@@ -42,11 +44,17 @@ export const useChatStore = defineStore('chat', () => {
     const data = await request.get('/chat/config');
     llmConfig.value = { configured: data.configured, model: data.model, defaultModelId: data.defaultModelId || '', models: data.models || [] };
   };
-  const createConversation = async (title?: string) => {
-    const data = await request.post<Conversation>('/chat/conversations', { title });
+  const createConversation = async (title?: string, identity: { conversationType?: string; persona?: string; personaLabel?: string; customPersonaPrompt?: string } = {}) => {
+    const data = await request.post<Conversation>('/chat/conversations', { title, ...identity });
     conversations.value.unshift(data);
     return data;
   };
+  const configureIdentity = async (id: number, identity: { conversationType: string; persona?: string; personaLabel?: string; customPersonaPrompt?: string }) => {
+    const updated = await request.put<Conversation>('/chat/conversations/' + id + '/identity', identity);
+    conversations.value = conversations.value.map(c => c.id === id ? updated : c);
+    if (currentConversation.value?.id === id) currentConversation.value = updated;
+  };
+  const clearSelection = () => { ++selection; currentConversation.value = null; messages.value = []; };
   const updateConversation = async (id: number, data: Partial<Conversation>) => {
     const updated = await request.put<Conversation>('/chat/conversations/' + id, data);
     conversations.value = conversations.value.map(c => c.id === id ? updated : c);
@@ -95,7 +103,8 @@ export const useChatStore = defineStore('chat', () => {
     abortController.value = controller;
     let cid: number | undefined;
     try {
-      if (!currentConversation.value) await selectConversation(await createConversation(question.slice(0, 30)));
+      if (!currentConversation.value) await selectConversation(await createConversation(question.slice(0, 30), {
+        conversationType: persona ? 'ROLEPLAY' : 'ASSISTANT', persona, customPersonaPrompt: customSystemPrompt }));
       cid = currentConversation.value!.id;
       pendingQuestion.value = { id: -Date.now(), role: 'user', content: question,
         conversationId: cid, createdAt: new Date().toISOString() };
@@ -146,6 +155,6 @@ export const useChatStore = defineStore('chat', () => {
 
   return { conversations, currentConversation, messages, llmConfig, preferredModelId, isStreaming, conversationSettings,
     getConversationSettings, saveConversationSettings, loadConversations, loadDefaultConfig,
-    createConversation, updateConversation, deleteConversation, deleteMessage, selectConversation,
+    createConversation, configureIdentity, clearSelection, updateConversation, deleteConversation, deleteMessage, selectConversation,
     sendMessage, sendMessageAgent, sendConfigured: send, stopGeneration, abortController, resetForUser };
 }, { persist: { key: 'chatforum-chat', storage: localStorage, paths: ['conversationSettings', 'preferredModelId'] } });

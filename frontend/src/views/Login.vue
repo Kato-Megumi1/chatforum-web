@@ -1,5 +1,5 @@
 <template>
-  <div class="login-container" :style="{ backgroundImage: 'url(' + publicAsset('auth-bg.png') + ')' }">
+  <div class="login-container" :style="{ backgroundImage: 'url(' + publicAsset('auth-bg-optimized.jpg') + ')' }">
     <div class="login-card">
       <div class="login-header">
         <el-icon :size="48" color="#165DFF">

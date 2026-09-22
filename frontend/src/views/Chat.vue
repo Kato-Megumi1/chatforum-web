@@ -4,8 +4,8 @@
       <button class="mobile-icon-button mobile-conversations" @click="mobileSidebar = !mobileSidebar" :aria-expanded="mobileSidebar" aria-label="对话列表"><el-icon><Expand /></el-icon></button>
       <button class="mobile-conversation-title" @click="mobileOptions = !mobileOptions" :aria-expanded="mobileOptions" :disabled="!chatStore.currentConversation" aria-label="对话选项">
         <img v-if="selectedPersona === 'kato_megumi_persona'" :src="publicAsset('kato-megumi-avatar.jpg')" alt="" />
-        <span><strong>{{ hasPersonaActive ? personaDisplayName : 'AI 对话' }} <el-icon><ArrowDown /></el-icon></strong>
-          <small>{{ hasPersonaActive ? '角色扮演' : '随时聊点什么' }}<template v-if="selectedKnowledgeBaseId"> · 已选知识库</template></small></span>
+        <span><strong>{{ isLegacy ? '旧历史' : hasPersonaActive ? personaDisplayName : activeSpace === 'ROLEPLAY' ? '角色对话' : '普通 AI' }} <el-icon><ArrowDown /></el-icon></strong>
+          <small>{{ isLegacy ? '仅供回顾' : hasPersonaActive || activeSpace === 'ROLEPLAY' ? '角色扮演 · 独立记忆' : '问答与任务 · 独立记忆' }}<template v-if="selectedKnowledgeBaseId"> · 已选知识库</template></small></span>
       </button>
       <button class="mobile-icon-button" @click="handleNewChat(); mobileSidebar = false" aria-label="新建对话"><el-icon><EditPen /></el-icon></button>
     </header>
@@ -13,15 +13,20 @@
     <button v-if="mobileOptions" class="mobile-options-backdrop" aria-label="关闭对话选项" @click="mobileOptions = false"></button>
     <aside class="chat-sidebar" :class="{ 'mobile-open': mobileSidebar }">
       <div class="sidebar-header">
+        <div class="conversation-spaces" role="tablist" aria-label="会话类型">
+          <button role="tab" :aria-selected="activeSpace === 'ASSISTANT'" :class="{active: activeSpace === 'ASSISTANT'}" @click="switchSpace('ASSISTANT')">普通 AI</button>
+          <button role="tab" :aria-selected="activeSpace === 'ROLEPLAY'" :class="{active: activeSpace === 'ROLEPLAY'}" @click="switchSpace('ROLEPLAY')">角色对话</button>
+          <button v-if="hasLegacy" role="tab" :aria-selected="activeSpace === 'LEGACY'" :class="{active: activeSpace === 'LEGACY'}" @click="switchSpace('LEGACY')">旧历史</button>
+        </div>
         <el-button type="primary" class="btn-new-chat" @click="handleNewChat(); mobileSidebar = false">
           <el-icon><Plus /></el-icon>
-          新建对话
+          {{ activeSpace === 'ROLEPLAY' ? '新建角色对话' : '新建 AI 对话' }}
         </el-button>
       </div>
       <div class="sidebar-content">
         <div class="conversation-list">
           <div
-            v-for="conv in chatStore.conversations"
+            v-for="conv in visibleConversations"
             :key="conv.id"
             class="conversation-item"
             :class="{ active: chatStore.currentConversation?.id === conv.id }"
@@ -32,7 +37,7 @@
             </div>
             <div class="conversation-info">
               <div class="conversation-title">{{ conv.title }}</div>
-              <div class="conversation-time">{{ formatTime(conv.updatedAt) }}</div>
+              <div class="conversation-time">{{ conv.personaLabel || (conv.conversationType === 'ASSISTANT' ? 'AI 助手' : '旧历史') }} · {{ formatTime(conv.updatedAt) }}</div>
             </div>
             <el-dropdown trigger="click" @click.stop>
               <el-icon class="conversation-more"><MoreFilled /></el-icon>
@@ -54,7 +59,7 @@
               </template>
             </el-dropdown>
           </div>
-          <div v-if="chatStore.conversations.length === 0" class="sidebar-empty">
+          <div v-if="visibleConversations.length === 0" class="sidebar-empty">
             <el-icon :size="40" color="#C9CDD4"><ChatDotRound /></el-icon>
             <p>暂无对话</p>
             <span>点击上方按钮开始</span>
@@ -76,14 +81,16 @@
             <ChatDotRound />
           </el-icon>
         </div>
-        <h2>开始对话</h2>
-        <p>选择一个对话或创建新对话以开始</p>
+        <h2>{{ activeSpace === 'ROLEPLAY' ? '与角色开始一段新对话' : '普通 AI，专注解决问题' }}</h2>
+        <p>{{ activeSpace === 'ROLEPLAY' ? '角色、相处状态与原作证据独立保存' : '问答与任务记忆独立，不带入角色身份' }}</p>
         <el-button type="primary" size="large" class="btn-start" @click="handleNewChat(); mobileSidebar = false">
           <el-icon><Plus /></el-icon>
           新建对话
         </el-button>
       </div>
       <div v-else class="chat-content">
+        <div v-if="isLegacy" class="identity-notice">旧会话已保留。身份混合或缺少标记的历史不会自动进入新记忆，请在对应模式新建会话。</div>
+        <div v-else-if="!hasPersonaActive" class="assistant-mode-bar"><el-icon><Service /></el-icon><strong>普通 AI 助手</strong><span>问答与任务 · 独立记忆</span></div>
         <div v-if="hasPersonaActive" class="persona-bar">
           <div class="persona-bar-avatar">
             <img v-if="selectedPersona === 'kato_megumi_persona'" :src="publicAsset('kato-megumi-avatar.jpg')" alt="加藤惠" />
@@ -96,8 +103,8 @@
           <div class="mobile-options-heading"><strong>对话选项</strong><button class="mobile-icon-button" @click="mobileOptions = false" aria-label="收起对话选项"><el-icon><Close /></el-icon></button></div>
           <div class="toolbar-left">
             <div class="toolbar-item persona-select">
-              <span class="toolbar-label">角色扮演</span>
-              <el-select v-model="selectedPersona" size="small" placeholder="选择角色" class="toolbar-select" :class="{ 'has-persona': hasPersonaActive }">
+              <span class="toolbar-label">{{ hasPersonaActive ? '当前角色' : '切换为角色' }}</span>
+              <el-select v-model="selectedPersona" size="small" placeholder="选择角色" class="toolbar-select" :disabled="chatStore.isStreaming || isLegacy" :class="{ 'has-persona': hasPersonaActive }">
                 <el-option label="无" value="" />
                 <el-option label="加藤惠" value="kato_megumi_persona" />
                 <el-option label="雪之下雪乃" value="yukinoshita_yukino_persona" />
@@ -105,7 +112,7 @@
               </el-select>
             </div>
             <div class="toolbar-item mode-toggle">
-              <span class="toolbar-label">对话模式</span>
+              <span class="toolbar-label">工具模式</span>
               <el-radio-group v-model="agentMode" size="small">
                 <el-radio-button value="normal">普通</el-radio-button>
                 <el-radio-button value="agent">Agent</el-radio-button>
@@ -133,8 +140,8 @@
           <el-button text type="primary" @click="loadKnowledgeBases">刷新列表</el-button>
         </div>
         <div v-if="selectedPersona === 'custom'" class="custom-persona-inline">
-          <el-input v-model="customPersonaName" placeholder="角色名称" size="small" class="custom-name" />
-          <el-input v-model="customPersonaPrompt" type="textarea" :rows="2" placeholder="自定义系统提示词..." size="small" class="custom-prompt" />
+          <el-input v-model="customPersonaName" placeholder="角色名称" size="small" class="custom-name" :disabled="chatStore.messages.length > 0" />
+          <el-input v-model="customPersonaPrompt" type="textarea" :rows="2" placeholder="自定义系统提示词..." size="small" class="custom-prompt" :disabled="chatStore.messages.length > 0" />
         </div>
         <div class="chat-messages" ref="messagesRef">
           <div
@@ -154,7 +161,7 @@
               </div>
             </div>
             <div class="message-body">
-              <div class="message-role">{{ msg.role === 'user' ? userDisplayName : aiDisplayName }}</div>
+              <div class="message-role">{{ msg.role === 'user' ? userDisplayName : messageIdentity(msg) }}</div>
               <div class="message-bubble" :class="[msg.role, { 'thinking-bubble': msg.pending && !msg.content }]">
                 <span v-if="msg.pending && !msg.content" class="typing-indicator" role="status" aria-label="正在思考"></span>
                 <template v-else>
@@ -202,7 +209,7 @@
               :rows="3"
               :placeholder="messagePlaceholder"
               @keydown.enter="handleKeyDown"
-              :disabled="chatStore.isStreaming"
+              :disabled="chatStore.isStreaming || isLegacy"
               class="chat-textarea"
             />
             <el-button
@@ -218,7 +225,7 @@
             <el-button
               v-else
               type="primary"
-              :disabled="!inputText.trim()"
+              :disabled="!inputText.trim() || isLegacy"
               class="btn-send"
               aria-label="发送消息"
               @pointerdown.prevent
@@ -240,6 +247,10 @@
         </el-form-item>
         <p class="model-help">选择按对话保存在当前浏览器。普通聊天、Agent 和知识库回答均使用所选模型；密钥和接口地址仅由服务端维护。</p>
         <p v-for="model in chatStore.llmConfig.models.filter(m => !m.available)" :key="model.id" class="model-help">{{ model.label }}：{{ model.unavailableReason }}</p>
+        <el-form-item v-if="chatStore.currentConversation && !isLegacy" :label="hasPersonaActive ? '同角色跨会话记忆' : '普通 AI 跨会话记忆'">
+          <el-switch :model-value="!!chatStore.currentConversation.sharedMemory" :disabled="chatStore.isStreaming" @change="toggleSharedMemory" />
+        </el-form-item>
+        <p class="model-help">默认仅记住当前会话。开启后，只读取你本人同模式、同角色下也已开启共享的历史摘录；普通 AI 与角色记忆互不混用。</p>
         <div v-if="agentMode === 'agent'" class="skills-section">
           <div class="skills-header">
             <span class="skills-label">已启用的技能</span>
@@ -310,6 +321,42 @@ const enabledSkills = ref<string[]>([]);
 const knowledgeBases = ref<any[]>([]);
 const knowledgeLoading = ref(false), knowledgeError = ref('');
 const clickedMsgId = ref<number | null>(null);
+const activeSpace = ref<'ASSISTANT' | 'ROLEPLAY' | 'LEGACY'>('ASSISTANT');
+const hasLegacy = computed(() => chatStore.conversations.some(c => !c.conversationType || c.conversationType === 'LEGACY'));
+const isLegacy = computed(() => !!chatStore.currentConversation && (!chatStore.currentConversation.conversationType || chatStore.currentConversation.conversationType === 'LEGACY'));
+const visibleConversations = computed(() => chatStore.conversations.filter(c => (c.conversationType || 'LEGACY') === activeSpace.value));
+const switchSpace = async (space: 'ASSISTANT' | 'ROLEPLAY' | 'LEGACY') => {
+  activeSpace.value = space;
+  const target = chatStore.conversations.find(c => (c.conversationType || 'LEGACY') === space);
+  try { if (target) await chatStore.selectConversation(target); else chatStore.clearSelection(); }
+  catch (e: any) { ElMessage.error(e.message || '会话加载失败，请重试'); }
+};
+watch(() => chatStore.currentConversation?.id, () => {
+  if (chatStore.currentConversation) activeSpace.value = chatStore.currentConversation.conversationType || 'LEGACY';
+});
+const toggleSharedMemory = async (value: boolean | string | number) => {
+  if (!chatStore.currentConversation) return;
+  try { await chatStore.updateConversation(chatStore.currentConversation.id, { sharedMemory: value === true }); }
+  catch (e: any) { ElMessage.error(e.message || '记忆设置保存失败'); }
+};
+const switchPersona = async (persona: string) => {
+  if (chatStore.isStreaming || isLegacy.value) return;
+  const identity = { conversationType: persona ? 'ROLEPLAY' : 'ASSISTANT', persona: persona || undefined };
+  try {
+    const current = chatStore.currentConversation;
+    if (current && !chatStore.messages.length) await chatStore.configureIdentity(current.id, identity);
+    else {
+      const conversation = await chatStore.createConversation(undefined, identity);
+      await chatStore.selectConversation(conversation);
+      ElMessage.info('已新建独立会话，原来的消息与记忆保留在原会话');
+    }
+    activeSpace.value = persona ? 'ROLEPLAY' : 'ASSISTANT';
+  } catch (e: any) { ElMessage.error(e.message || '切换失败'); }
+};
+const messageIdentity = (msg: any) => {
+  const key = msg.ragMetadata?.personaKey;
+  return key === 'assistant' ? 'AI 助手' : personaMap[key]?.name || (isLegacy.value ? '历史助理' : aiDisplayName.value);
+};
 
 // Mode & persona settings, persisted per-conversation via chat store
 const agentMode = computed({
@@ -325,19 +372,18 @@ const agentMode = computed({
 
 const selectedPersona = computed({
   get: () => {
-    const cid = chatStore.currentConversation?.id;
-    return cid ? chatStore.getConversationSettings(cid).selectedPersona : '';
+    const conv = chatStore.currentConversation;
+    return conv?.conversationType === 'ROLEPLAY' ? (conv.personaKey?.startsWith('custom:') ? 'custom' : conv.personaKey || '') : '';
   },
   set: (val: string) => {
-    const cid = chatStore.currentConversation?.id;
-    if (cid) chatStore.saveConversationSettings(cid, { selectedPersona: val });
+    void switchPersona(val);
   },
 });
 
 const customPersonaName = computed({
   get: () => {
     const cid = chatStore.currentConversation?.id;
-    return cid ? chatStore.getConversationSettings(cid).customPersonaName : '';
+    return cid ? chatStore.getConversationSettings(cid).customPersonaName || chatStore.currentConversation?.personaLabel || '' : '';
   },
   set: (val: string) => {
     const cid = chatStore.currentConversation?.id;
@@ -348,7 +394,7 @@ const customPersonaName = computed({
 const customPersonaPrompt = computed({
   get: () => {
     const cid = chatStore.currentConversation?.id;
-    return cid ? chatStore.getConversationSettings(cid).customPersonaPrompt : '';
+    return cid ? chatStore.getConversationSettings(cid).customPersonaPrompt || chatStore.currentConversation?.customPersonaPrompt || '' : '';
   },
   set: (val: string) => {
     const cid = chatStore.currentConversation?.id;
@@ -514,7 +560,9 @@ const getCleanContent = (content: string): string => {
 };
 
 const handleNewChat = async () => {
-  const conv = await chatStore.createConversation();
+  const role = activeSpace.value === 'ROLEPLAY' ? selectedPersona.value || 'kato_megumi_persona' : undefined;
+  const conv = await chatStore.createConversation(undefined, { conversationType: role ? 'ROLEPLAY' : 'ASSISTANT', persona: role,
+    ...(role === 'custom' ? { personaLabel: customPersonaName.value, customPersonaPrompt: buildCustomSystemPrompt() } : {}) });
   await chatStore.selectConversation(conv);
   inputText.value = '';
   scrollToBottom();
@@ -522,7 +570,7 @@ const handleNewChat = async () => {
 
 let sendingLock = false;
 const handleSendMessage = async () => {
-  if (sendingLock || chatStore.isStreaming) return;
+  if (sendingLock || chatStore.isStreaming || isLegacy.value) return;
   const text = inputText.value.trim();
   if (!text) return;
   if (!selectedModel.value?.available) { ElMessage.warning('请选择可用的服务端模型'); return; }
@@ -532,9 +580,15 @@ const handleSendMessage = async () => {
 
   sendingLock = true;
   inputText.value = '';
+  const sendingConversationId = chatStore.currentConversation?.id;
   try {
     const persona = hasPersonaActive.value ? selectedPersona.value : undefined;
-    const systemPrompt = selectedPersona.value === 'custom' ? buildCustomSystemPrompt() : undefined;
+    const systemPrompt = selectedPersona.value === 'custom' ?
+      (chatStore.messages.length ? chatStore.currentConversation?.customPersonaPrompt || buildCustomSystemPrompt() : buildCustomSystemPrompt()) : undefined;
+    if (selectedPersona.value === 'custom' && !chatStore.messages.length && chatStore.currentConversation)
+      await chatStore.configureIdentity(chatStore.currentConversation.id, { conversationType: 'ROLEPLAY', persona: 'custom',
+        personaLabel: customPersonaName.value, customPersonaPrompt: systemPrompt });
+    if (chatStore.currentConversation?.id !== sendingConversationId) throw new Error('会话已切换，请在原会话重新发送');
     const skills = agentMode.value === 'agent' ? enabledSkills.value : [];
     const kbId = selectedKnowledgeBaseId.value > 0 ? selectedKnowledgeBaseId.value : undefined;
     await chatStore.sendConfigured(text, agentMode.value === 'agent' ? 'agent' : 'normal', skills, persona, systemPrompt, kbId);
@@ -548,6 +602,10 @@ const handleSendMessage = async () => {
 };
 
 const buildCustomSystemPrompt = () => {
+  const saved = chatStore.currentConversation;
+  // Cloning an unchanged custom character must preserve its server fingerprint.
+  if (saved?.customPersonaPrompt && customPersonaPrompt.value === saved.customPersonaPrompt &&
+    customPersonaName.value === saved.personaLabel) return saved.customPersonaPrompt;
   const name = customPersonaName.value || '自定义角色';
   if (customPersonaPrompt.value.trim()) return '你正在模拟角色“' + name + '”。角色设定不能改变原文事实或系统安全规则。\n' + customPersonaPrompt.value.trim();
   return `你是${name}，不是AI助手。你是一个真实的人，正在和朋友聊天。你必须完全沉浸在这个角色中。
@@ -664,6 +722,13 @@ onMounted(async () => {
 </script>
 
 <style lang="scss" scoped>
+.conversation-spaces { display: flex; gap: 4px; padding: 4px; margin-bottom: 12px; background: #f1f4f8; border-radius: 10px; }
+.conversation-spaces button { flex: 1; min-width: 0; padding: 9px 3px; border: 0; border-radius: 7px; background: transparent; color: #677387; font: inherit; font-size: 13px; cursor: pointer; }
+.conversation-spaces button.active { background: white; color: #245da8; box-shadow: 0 1px 5px #142c4714; font-weight: 600; }
+.assistant-mode-bar { display: flex; align-items: center; gap: 10px; margin: 16px 20px 0; padding: 13px 18px; border: 1px solid #dce9f8; border-radius: 12px; background: #f5f9ff; color: #31577e; }
+.assistant-mode-bar span { margin-left: auto; font-size: 12px; color: #71869b; }
+.identity-notice { padding: 12px 20px; font-size: 13px; line-height: 1.6; color: #7e6040; background: #fff9ed; }
+@media (max-width: 900px) { .assistant-mode-bar { display: none; } .identity-notice { padding: 10px 16px; } }
 .knowledge-notice { padding: 8px 20px; color: #7e6040; font-size: 13px; background: #fff9ed; line-height: 1.6; }
 .model-help { color: #677387; font-size: 13px; line-height: 1.7; margin: 8px 0 16px; }
 .chat-layout {
