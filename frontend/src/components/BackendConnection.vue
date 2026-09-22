@@ -1,8 +1,8 @@
 <template>
-  <div class="connection" :class="{ 'connection-in-app': !['/login', '/register'].includes(route.path) }">
+  <div v-if="CONNECTION_SETTINGS_ENABLED" class="connection" :class="{ 'connection-in-app': !['/login', '/register'].includes(route.path) }">
     <el-button text size="small" @click="visible = true">连接设置</el-button>
     <el-dialog v-model="visible" title="后端连接" width="min(480px, 95vw)" append-to-body>
-      <p>异地访问时填写本机后端的 HTTPS 隧道地址，末尾加 /api。电脑与 Docker 需要保持运行。</p>
+      <p>仅供本地开发调试。地址以 /api 结尾；保存后将清除当前浏览器的登录状态。请仅连接你信任的后端。</p>
       <el-input v-model="address" placeholder="https://your-host.example/api" />
       <p v-if="result">{{ result }}</p>
       <template #footer>
@@ -16,11 +16,11 @@
 import { ref, onMounted, onUnmounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
-import { API_BASE } from '@/utils/api';
-const visible = ref(location.hostname.endsWith('.github.io') && API_BASE === '/api');
+import { API_BASE, CONNECTION_SETTINGS_ENABLED } from '@/utils/api';
+const visible = ref(false);
 const route = useRoute();
-const open = () => { visible.value = true; };
-onMounted(() => window.addEventListener('chatforum:connection-settings', open));
+const open = () => { if (CONNECTION_SETTINGS_ENABLED) visible.value = true; };
+onMounted(() => { if (CONNECTION_SETTINGS_ENABLED) window.addEventListener('chatforum:connection-settings', open); });
 onUnmounted(() => window.removeEventListener('chatforum:connection-settings', open));
 const address = ref(API_BASE), result = ref(''), checking = ref(false);
 function valid() {
@@ -32,6 +32,7 @@ function valid() {
   } catch { return false; }
 }
 async function check() {
+  if (!CONNECTION_SETTINGS_ENABLED) return;
   if (!valid()) return ElMessage.warning('请输入 HTTPS 地址，以 /api 结尾');
   checking.value = true; result.value = '';
   try {
@@ -42,6 +43,7 @@ async function check() {
   finally { checking.value = false; }
 }
 function save() {
+  if (!CONNECTION_SETTINGS_ENABLED) return;
   if (!valid()) return ElMessage.warning('请输入 HTTPS 地址，以 /api 结尾');
   localStorage.setItem('chatforum-api-base', address.value.replace(/\/$/, ''));
   localStorage.removeItem('chatforum-user');

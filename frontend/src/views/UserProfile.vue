@@ -3,7 +3,7 @@
     <div class="profile-wrapper">
       <el-page-header @back="$router.back()" title="返回" class="page-header" />
       <div class="profile-main" v-if="userStore.user">
-        <el-button class="mobile-profile-connection" plain @click="openConnection"><el-icon><Connection /></el-icon>后端连接设置</el-button>
+        <el-button v-if="CONNECTION_SETTINGS_ENABLED" class="mobile-profile-connection" plain @click="openConnection"><el-icon><Connection /></el-icon>后端连接设置</el-button>
         <div class="profile-card">
           <div class="avatar-section">
             <input
@@ -80,7 +80,7 @@
 
 <script setup lang="ts">
 const openConnection = () => window.dispatchEvent(new Event('chatforum:connection-settings'));
-import { apiUrl, normalizeMedia } from '@/utils/api';
+import { apiUrl, normalizeMedia, CONNECTION_SETTINGS_ENABLED } from '@/utils/api';
 import { ref, reactive, onMounted } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useUserStore } from '@/stores/user';

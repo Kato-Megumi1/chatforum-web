@@ -1,5 +1,12 @@
-const stored = localStorage.getItem('chatforum-api-base') || '';
-export const API_BASE = (stored || import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '');
+export const CONNECTION_SETTINGS_ENABLED = import.meta.env.DEV;
+let stored = '';
+// Production trusts deployment configuration only. Never read a browser override,
+// including values left behind by earlier releases or edited in developer tools.
+if (import.meta.env.DEV) {
+  try { stored = localStorage.getItem('chatforum-api-base') || ''; }
+  catch { /* Restricted browser storage: keep the configured development default. */ }
+}
+export const API_BASE = (stored || import.meta.env.VITE_API_BASE_URL || '/api').trim().replace(/\/+$/, '');
 export const apiUrl = (route: string) => API_BASE + '/' + route.replace(/^\//, '');
 export const publicAsset = (name: string) => import.meta.env.BASE_URL + name.replace(/^\//, '');
 export const mediaUrl = (value?: string) => {

@@ -71,7 +71,7 @@
           <el-icon><Setting /></el-icon>
           模型设置
         </el-button>
-        <el-button class="mobile-connection-button" text @click="openConnection"><el-icon><Connection /></el-icon>连接设置</el-button>
+        <el-button v-if="CONNECTION_SETTINGS_ENABLED" class="mobile-connection-button" text @click="openConnection"><el-icon><Connection /></el-icon>连接设置</el-button>
       </div>
     </aside>
     <main class="chat-main" :class="{ 'persona-theme': hasPersonaActive }">
@@ -293,7 +293,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import RagEvidence from '@/components/RagEvidence.vue';
-import { publicAsset } from '@/utils/api';
+import { publicAsset, CONNECTION_SETTINGS_ENABLED } from '@/utils/api';
 import { useChatStore } from '@/stores/chat';
 import { useUserStore } from '@/stores/user';
 import dayjs from 'dayjs';

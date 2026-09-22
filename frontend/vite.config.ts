@@ -2,8 +2,20 @@ import { defineConfig, loadEnv } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import { fileURLToPath, URL } from 'node:url';
 
-export default defineConfig(({ mode }) => ({
-  base: loadEnv(mode, process.cwd(), '').VITE_BASE_PATH || '/',
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '');
+  if (env.VITE_PAGES === 'true') {
+    // Fail publication rather than ship a login page that asks visitors to configure it.
+    let valid = false;
+    try {
+      const url = new URL(env.VITE_API_BASE_URL);
+      valid = url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash &&
+        url.pathname.replace(/\/+$/, '') === '/api';
+    } catch { /* A missing/invalid deployment address is a build error. */ }
+    if (!valid) throw new Error('Pages requires VITE_API_BASE_URL: a public HTTPS backend URL ending in /api. Set repository variable PUBLIC_API_BASE_URL.');
+  }
+  return {
+  base: env.VITE_BASE_PATH || '/',
   plugins: [vue()],
   resolve: {
     alias: {
@@ -32,4 +44,5 @@ export default defineConfig(({ mode }) => ({
       },
     },
   },
-}));
+};
+});
