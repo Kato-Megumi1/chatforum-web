@@ -33,28 +33,28 @@ const emit = defineEmits(['update:modelValue', 'update:mode', 'update:knowledgeB
 </script>
 
 <style scoped>
-.assistant-composer { width: 100%; padding: 17px 18px 12px; border: 1px solid #e8e8ec; background: #fff; border-radius: 25px; box-shadow: 0 5px 28px #22243b0a; box-sizing: border-box; }
-.assistant-composer:focus-within { border-color: #c8cbd5; box-shadow: 0 5px 28px #22243b10; }
-.assistant-composer :deep(.el-textarea__inner) { box-shadow: none; background: transparent; resize: none; padding: 2px 6px 12px; font-size: 16px; line-height: 1.7; color: #25272c; }
-.assistant-composer :deep(.el-textarea__inner::placeholder) { color: #a4a6ad; }
+.assistant-composer { width: 100%; padding: 17px 18px 12px; border: 1px solid #b7c7dc; background: #fff; border-radius: 25px; box-shadow: 0 6px 24px #253f6212, 0 1px 3px #253f6208; box-sizing: border-box; }
+.assistant-composer:focus-within { border-color: #6084b7; box-shadow: 0 0 0 3px #557fb514, 0 6px 24px #253f6212; }
+.assistant-composer :deep(.el-textarea__inner) { box-shadow: none; background: transparent; resize: none; padding: 2px 6px 12px; font-size: 16px; line-height: 1.7; color: #202733; }
+.assistant-composer :deep(.el-textarea__inner::placeholder) { color: #657287; }
 .composer-bottom { display: flex; align-items: flex-end; gap: 10px; justify-content: space-between; }
 .composer-tools { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; min-width: 0; }
-.composer-modes { display: flex; padding: 3px; border-radius: 18px; background: #f4f4f6; gap: 2px; }
-button { font: inherit; cursor: pointer; border: 0; background: transparent; color: #686a73; }
+.composer-modes { display: flex; padding: 3px; border-radius: 18px; background: #e7ecf3; gap: 2px; }
+button { font: inherit; cursor: pointer; border: 0; background: transparent; color: #435166; }
 button:disabled { cursor: not-allowed; opacity: .5; }
 button:focus-visible { outline: 2px solid #668bdf; outline-offset: 2px; }
 .composer-modes button { display: inline-flex; align-items: center; gap: 4px; padding: 6px 11px; font-size: 13px; border-radius: 15px; }
-.composer-modes button.selected { color: #242630; background: white; box-shadow: 0 1px 4px #0000000d; }
+.composer-modes button.selected { color: #203f6c; background: white; box-shadow: 0 1px 4px #253f6226; font-weight: 600; }
 .tool-pill { border-radius: 16px; font-size: 13px; padding: 8px 9px; display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
-.tool-pill:hover { background: #f5f5f7; color: #252731; }
-.tool-pill.enabled { background: #edf3ff; color: #3a61a9; }
+.tool-pill:hover { background: #eaf0f8; color: #243d62; }
+.tool-pill.enabled { background: #e0eafa; color: #234f89; }
 .code-symbol { font-size: 13px; font-weight: 600; }
-.composer-send { display: flex; align-items: center; justify-content: center; flex: 0 0 36px; width: 36px; height: 36px; border-radius: 50%; background: #24252a; color: white; font-size: 20px; }
-.composer-send:disabled { background: #eeeef0; color: #b5b5bc; opacity: 1; }
+.composer-send { display: flex; align-items: center; justify-content: center; flex: 0 0 36px; width: 36px; height: 36px; border-radius: 50%; background: #2d4d77; color: white; font-size: 20px; }
+.composer-send:disabled { background: #e0e6ef; color: #77869b; opacity: 1; }
 .stop span { width: 11px; height: 11px; background: white; border-radius: 2px; }
-.coding-attached { display: flex; align-items: center; gap: 6px; margin: 11px 5px 0; padding-top: 9px; border-top: 1px solid #f0f0f3; font-size: 11px; color: #9295a0; }
+.coding-attached { display: flex; align-items: center; gap: 6px; margin: 11px 5px 0; padding-top: 9px; border-top: 1px solid #dce3ed; font-size: 12px; color: #596980; }
 .coding-attached button { margin-left: auto; font-size: 18px; }
-.composer-kb-label { font-size: 13px; color: #777; margin-bottom: 10px; }
-@media(max-width: 900px) { .assistant-composer { border-radius: 21px; padding: 13px 12px 10px; } .composer-tools { gap: 2px; } .tool-pill { font-size: 12px; padding: 7px; } .composer-modes button { padding: 6px 8px; font-size: 12px; } .settings-tool { display: none; } .composer-send { align-self: flex-end; } .coding-attached { font-size: 10px; } }
+.composer-kb-label { font-size: 13px; color: #526177; margin-bottom: 10px; }
+@media(max-width: 900px) { .assistant-composer { border-radius: 21px; padding: 13px 12px 10px; } .composer-tools { gap: 2px; } .tool-pill { font-size: 12px; padding: 7px; } .composer-modes button { padding: 6px 8px; font-size: 12px; } .settings-tool { display: none; } .composer-send { align-self: flex-end; } .coding-attached { font-size: 12px; } }
 @media(max-width: 370px) { .composer-tools { max-width: 230px; } }
 </style>
