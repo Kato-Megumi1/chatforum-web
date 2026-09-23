@@ -1,4 +1,11 @@
 import request from './request';
+export interface ChatFile { id:number; path:string; revision:number; kind?:string; bytes?:number; }
+export function deleteChatFile(conversationId:number, file:ChatFile) {
+  if (!Number.isSafeInteger(file.id) || file.id < 1) throw Error('文件信息已过期，请刷新文件列表');
+  return request.delete<{deleted:boolean;removedChanges:number}>(`/coding/${conversationId}/files/${file.id}`, {
+    params:{kind:file.kind && file.kind !== 'text'?'attachment':'text',revision:file.revision},
+  });
+}
 const TEXT_ACCEPT = '.js,.jsx,.ts,.tsx,.cjs,.mjs,.json,.vue,.html,.css,.scss,.md,.txt,.csv,.py,.java,.go,.rs,.sql,.yml,.yaml,.toml';
 export const CHAT_FILE_ACCEPT = TEXT_ACCEPT + ',.pdf,.docx,.png,.jpg,.jpeg,.webp';
 const isBinary = (name:string) => /\.(pdf|docx|png|jpe?g|webp)$/i.test(name);

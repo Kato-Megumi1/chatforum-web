@@ -1,17 +1,19 @@
 <template>
   <div class="assistant-composer">
     <div v-if="files?.length" class="attachment-list" aria-label="会话附件">
-      <button v-for="file in files" :key="file.path" class="attachment-chip" @click="emit('files')" :title="file.path"><el-icon><Document /></el-icon><span>{{ file.path }}</span><small>v{{ file.revision }}</small></button>
+      <div v-for="file in files" :key="`${file.kind || 'text'}-${file.id}`" class="attachment-chip">
+        <button class="attachment-open" @click="emit('files')" :title="file.path"><el-icon><Document /></el-icon><span>{{ file.path }}</span></button>
+        <button class="attachment-remove" :disabled="busy || uploading || removing" :aria-label="`删除附件 ${file.path}`" @click="emit('remove',file)"><el-icon><Close /></el-icon></button>
+      </div>
     </div>
     <el-input class="chat-textarea" :model-value="modelValue" @update:model-value="emit('update:modelValue', $event)" type="textarea"
-      :autosize="{ minRows: 2, maxRows: 7 }" placeholder="发消息、提问题，或描述你想完成的事…" :disabled="busy"
-      @keydown.enter="emit('enter', $event)" aria-label="消息输入" />
+      :autosize="{ minRows: 3, maxRows: 10 }" placeholder="发消息、提问题，或描述你想完成的事…" :disabled="busy"
+      @paste="pasteFiles" @keydown.enter="emit('enter', $event)" aria-label="消息输入" />
     <div class="composer-bottom">
       <div class="composer-tools">
-        <el-popover placement="top-start" :width="285" trigger="click">
+        <el-popover v-model:visible="uploadMenu" placement="top-start" :width="180" trigger="click">
           <template #reference><button class="add-file" aria-label="添加文件" :disabled="busy || uploading"><el-icon><Plus /></el-icon></button></template>
-          <button class="upload-file-menu" :disabled="busy || uploading" @click="fileInput?.click()"><el-icon><Upload /></el-icon>{{ uploading ? '正在上传…' : '上传文件' }}</button>
-          <p class="upload-file-hint">图片、PDF、Word（DOCX）每个20MB；文本/代码64KB。图片与扫描PDF需选择Qwen。相关内容会发给所选模型，请勿上传密钥或私密资料。修改版可下载，原件保留。</p>
+          <button class="upload-file-menu" :disabled="busy || uploading" @click="openPicker"><el-icon><Upload /></el-icon>{{ uploading ? '正在上传…' : '上传文件' }}</button>
         </el-popover>
         <input ref="fileInput" type="file" :accept="CHAT_FILE_ACCEPT" multiple hidden @change="chooseFiles" />
         <div class="composer-modes" role="group" aria-label="回答模式">
@@ -29,8 +31,8 @@
         </el-popover>
         <button class="tool-pill settings-tool" aria-label="模型设置" @click="emit('settings')"><el-icon><Setting /></el-icon></button>
       </div>
-      <button v-if="busy && !uploading" class="composer-send stop" aria-label="停止生成" @click="emit('stop')"><span></span></button>
-      <button v-else class="composer-send btn-send" aria-label="发送消息" :disabled="!modelValue.trim() || uploading" @pointerdown.prevent @click="emit('send')"><el-icon><Top /></el-icon></button>
+      <button v-if="busy && !uploading && !removing" class="composer-send stop" aria-label="停止生成" @click="emit('stop')"><span></span></button>
+      <button v-else class="composer-send btn-send" aria-label="发送消息" :disabled="!modelValue.trim() || uploading || removing" @pointerdown.prevent @click="emit('send')"><el-icon><Top /></el-icon></button>
     </div>
     <div v-if="coding" class="coding-attached"><el-icon><FolderOpened /></el-icon><a href="#" @click.prevent="emit('files')">{{ files?.length ? `${files.length} 个会话文件 · 查看 / 下载` : '可生成文件 · 查看会话文件' }}</a><button aria-label="停用文件工具" @click="emit('disableCoding')" :disabled="busy">×</button></div>
   </div>
@@ -38,11 +40,21 @@
 
 <script setup lang="ts">
 import { ref } from 'vue';
-import { CHAT_FILE_ACCEPT } from '@/utils/chat-files';
-defineProps<{ modelValue: string; mode: string; busy: boolean; coding: boolean; files?: Array<{path:string;revision:number}>; uploading?: boolean; knowledgeBaseId: number; knowledgeBases: any[] }>();
+import { CHAT_FILE_ACCEPT, type ChatFile } from '@/utils/chat-files';
+import { clipboardFiles } from '@/utils/clipboard-files';
+const props = defineProps<{ modelValue: string; mode: string; busy: boolean; coding: boolean; files?: ChatFile[]; uploading?: boolean; removing?: boolean; knowledgeBaseId: number; knowledgeBases: any[] }>();
 const fileInput = ref<HTMLInputElement>();
-const emit = defineEmits(['update:modelValue', 'update:mode', 'update:knowledgeBaseId', 'enter', 'send', 'stop', 'settings', 'coding', 'disableCoding', 'upload', 'files']);
+const uploadMenu=ref(false);
+const emit = defineEmits(['update:modelValue', 'update:mode', 'update:knowledgeBaseId', 'enter', 'send', 'stop', 'settings', 'coding', 'disableCoding', 'upload', 'files', 'remove']);
+function openPicker(){uploadMenu.value=false;fileInput.value?.click();}
 function chooseFiles(event:Event) { const input=event.target as HTMLInputElement; const files=Array.from(input.files||[]);input.value='';if(files.length)emit('upload',files); }
+function pasteFiles(event:ClipboardEvent) {
+  const files=clipboardFiles(event.clipboardData,props.files?.map(f=>f.path));
+  if(!files.length)return; // Leave ordinary text/code paste to the browser, including cursor/selection behavior.
+  event.preventDefault();
+  if(props.busy || props.uploading || props.removing)return;
+  uploadMenu.value=false;emit('upload',files);
+}
 </script>
 
 <style scoped>
@@ -53,10 +65,11 @@ function chooseFiles(event:Event) { const input=event.target as HTMLInputElement
 .composer-bottom { display: flex; align-items: flex-end; gap: 10px; justify-content: space-between; }
 .add-file { display:grid;place-items:center;width:33px;height:33px;border-radius:50%;background:#e8edf4;font-size:22px;color:#334a68;flex-shrink:0; }
 .upload-file-menu { width:100%;display:flex;gap:9px;align-items:center;padding:12px;border:0;background:#f2f5fa;border-radius:9px;color:#273c59;cursor:pointer;font-size:14px; }
-.upload-file-hint { font-size:11px;line-height:1.7;color:#6a778a;margin:10px 3px 2px; }
 .attachment-list { display:flex;gap:8px;overflow-x:auto;padding:0 4px 12px; }
-.attachment-chip { display:flex;align-items:center;gap:7px;flex-shrink:0;max-width:230px;border:1px solid #d4dfed;background:#f3f6fb;border-radius:11px;padding:9px 11px;font-size:12px; }
-.attachment-chip span { overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }.attachment-chip small { color:#708097; }
+.attachment-chip { display:flex;align-items:center;gap:4px;flex-shrink:0;max-width:250px;border:1px solid #d4dfed;background:#f3f6fb;border-radius:11px;padding:5px 6px 5px 10px;font-size:12px; }
+.attachment-open { display:flex;align-items:center;gap:7px;min-width:0;padding:4px 0; }.attachment-open span { overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.attachment-remove { width:28px;height:28px;display:grid;place-items:center;flex-shrink:0;border-radius:7px;font-size:14px; }
+.attachment-remove:hover:not(:disabled) { background:#e4eaf3;color:#223e65; }
 .composer-tools { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; min-width: 0; }
 .composer-modes { display: flex; padding: 3px; border-radius: 18px; background: #e7ecf3; gap: 2px; }
 button { font: inherit; cursor: pointer; border: 0; background: transparent; color: #435166; }

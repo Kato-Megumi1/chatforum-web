@@ -81,7 +81,7 @@
         <div class="assistant-start">
           <div class="assistant-suggestions"><button @click="suggest('帮我看看论坛最新的7条帖子', true)"><el-icon><ChatLineSquare /></el-icon>逛逛社区<span>↗</span></button><button @click="openCoding"><span class="code-symbol">&lt;/&gt;</span>一起写代码<span>↗</span></button><button @click="suggest('帮我梳理一下这个想法：', false)"><el-icon><EditPen /></el-icon>梳理一个想法<span>↗</span></button></div>
           <AssistantComposer v-model="inputText" v-model:mode="agentMode" v-model:knowledge-base-id="selectedKnowledgeBaseId"
-            :busy="chatStore.isStreaming || uploadingFiles" :coding="codingEnabled" :files="chatFiles" :uploading="uploadingFiles" :knowledge-bases="knowledgeBases" @upload="uploadFiles" @files="showCode = true" @enter="handleKeyDown" @send="handleSendMessage" @stop="handleStopGeneration" @settings="showSettings = true" @coding="openCoding" @disable-coding="disableCoding" />
+            :busy="chatStore.isStreaming || uploadingFiles || removingFiles" :coding="codingEnabled" :files="chatFiles" :uploading="uploadingFiles" :removing="removingFiles" :knowledge-bases="knowledgeBases" @upload="uploadFiles" @remove="removeFile" @files="showCode = true" @enter="handleKeyDown" @send="handleSendMessage" @stop="handleStopGeneration" @settings="showSettings = true" @coding="openCoding" @disable-coding="disableCoding" />
           <p class="assistant-footnote">{{ agentMode === 'agent' ? 'Agent 可调用已启用工具；编程修改由你确认。' : '普通模式专注对话；需要工具时可切换 Agent。' }}</p>
         </div>
       </div>
@@ -214,8 +214,8 @@
         <div class="chat-input-area">
           <template v-if="isAssistant">
             <AssistantComposer v-model="inputText" v-model:mode="agentMode" v-model:knowledge-base-id="selectedKnowledgeBaseId"
-              :busy="chatStore.isStreaming || uploadingFiles" :coding="codingEnabled" :files="chatFiles" :uploading="uploadingFiles" :knowledge-bases="knowledgeBases" @upload="uploadFiles" @files="showCode = true" @enter="handleKeyDown" @send="handleSendMessage" @stop="handleStopGeneration" @settings="showSettings = true" @coding="openCoding" @disable-coding="disableCoding" />
-            <p class="assistant-footnote">{{ codingEnabled ? '文件仅操作上传副本，修改版可下载；不改动本机原文件，不运行代码。' : '内容由 AI 生成，重要信息请核实。' }}</p>
+              :busy="chatStore.isStreaming || uploadingFiles || removingFiles" :coding="codingEnabled" :files="chatFiles" :uploading="uploadingFiles" :removing="removingFiles" :knowledge-bases="knowledgeBases" @upload="uploadFiles" @remove="removeFile" @files="showCode = true" @enter="handleKeyDown" @send="handleSendMessage" @stop="handleStopGeneration" @settings="showSettings = true" @coding="openCoding" @disable-coding="disableCoding" />
+            <p class="assistant-footnote">内容由 AI 生成，重要信息请核实。</p>
           </template>
           <div v-else class="chat-input-wrapper">
             <el-input
@@ -252,7 +252,7 @@
         </div>
       </div>
     </main>
-    <CodeWorkspace v-if="isAssistant && chatStore.currentConversation" v-model="showCode" :conversation-id="chatStore.currentConversation.id" :refresh-key="chatStore.isStreaming" @changed="refreshFiles" />
+    <CodeWorkspace v-if="isAssistant && chatStore.currentConversation" v-model="showCode" :conversation-id="chatStore.currentConversation.id" :refresh-key="chatStore.isStreaming || uploadingFiles || removingFiles" @changed="refreshFiles" />
     <el-drawer v-model="showSettings" title="模型设置" size="min(420px, 100vw)" class="settings-drawer">
       <el-form label-position="top">
         <el-form-item label="对话模型（仅选择，不配置密钥）">
@@ -314,7 +314,7 @@ import RagEvidence from '@/components/RagEvidence.vue';
 import AssistantComposer from '@/components/AssistantComposer.vue';
 import CodeWorkspace from '@/components/CodeWorkspace.vue';
 import FileArtifacts from '@/components/FileArtifacts.vue';
-import { uploadChatFiles } from '@/utils/chat-files';
+import { uploadChatFiles, deleteChatFile, type ChatFile } from '@/utils/chat-files';
 import { publicAsset, CONNECTION_SETTINGS_ENABLED } from '@/utils/api';
 import { useChatStore } from '@/stores/chat';
 import { useUserStore } from '@/stores/user';
@@ -328,7 +328,7 @@ const mobileSidebar = ref(false);
 const mobileOptions = ref(false);
 const openConnection = () => { window.dispatchEvent(new Event('chatforum:connection-settings')); mobileSidebar.value = false; };
 const userStore = useUserStore();
-const chatFiles = ref<Array<{path:string;revision:number}>>([]), uploadingFiles = ref(false);
+const chatFiles = ref<ChatFile[]>([]), uploadingFiles = ref(false), removingFiles = ref(false);
 function disableCoding() { codingEnabled.value = false; }
 const ownerId = userStore.user!.id;
 chatStore.initializeNavigation(ownerId);
@@ -489,7 +489,7 @@ async function createAssistant() {
 }
 let openingCode = false;
 async function openCoding() {
-  if (openingCode || chatStore.isStreaming || !isAssistant.value) return;
+  if (openingCode || uploadingFiles.value || removingFiles.value || chatStore.isStreaming || !isAssistant.value) return;
   openingCode = true;
   try { await ensureAssistantConversation(); agentMode.value = 'agent'; codingEnabled.value = true; showCode.value = true; }
   catch (e: any) { ElMessage.error(e.message || '工作区打开失败'); }
@@ -500,12 +500,12 @@ async function refreshFiles() {
   const cid = chatStore.currentConversation?.id, epoch = ++fileEpoch;
   chatFiles.value = [];
   if (!cid || !isAssistant.value || !ownsView()) return;
-  try { const value = await request.get<{files:Array<{path:string;revision:number}>}>('/coding/'+cid);
+  try { const value = await request.get<{files:ChatFile[]}>('/coding/'+cid);
     if (epoch === fileEpoch && ownsView() && cid === chatStore.currentConversation?.id && isAssistant.value) chatFiles.value = value.files || [];
   } catch { /* The drawer provides a visible retry; never reuse another conversation's files. */ }
 }
 async function uploadFiles(files:File[]) {
-  if (uploadingFiles.value || chatStore.isStreaming || !isAssistant.value) return;
+  if (uploadingFiles.value || removingFiles.value || chatStore.isStreaming || !isAssistant.value) return;
   uploadingFiles.value = true;
   try {
     await ensureAssistantConversation();
@@ -514,9 +514,21 @@ async function uploadFiles(files:File[]) {
     await uploadChatFiles(cid, files);
     if (!ownsView() || cid !== chatStore.currentConversation?.id) return;
     codingEnabled.value = true;
-    await refreshFiles(); ElMessage.success('已上传，可直接提问或要求修改；原文件不变');
+    await refreshFiles(); ElMessage.success('已上传');
   } catch(e:any) { ElMessage.error(e.message || '上传失败，请检查文件格式'); }
   finally { uploadingFiles.value = false; await refreshFiles(); }
+}
+async function removeFile(file:ChatFile) {
+  const cid=chatStore.currentConversation?.id;
+  if(!cid || !ownsView() || !isAssistant.value || uploadingFiles.value || removingFiles.value || chatStore.isStreaming)return;
+  removingFiles.value=true;
+  try {
+    await ElMessageBox.confirm(`删除“${file.path}”及其同名修改版？本机原件和已发送的消息不受影响。`, '删除附件', {confirmButtonText:'删除',cancelButtonText:'取消',type:'warning'});
+    if(!ownsView() || cid!==chatStore.currentConversation?.id || !isAssistant.value)return;
+    await deleteChatFile(cid,file);
+    if(ownsView() && cid===chatStore.currentConversation?.id){await refreshFiles();ElMessage.success('附件已删除');}
+  } catch(e:any) { if(e!=='cancel' && e!=='close' && ownsView())ElMessage.error(e.message || '删除失败，请重试'); }
+  finally { removingFiles.value=false; }
 }
 watch(() => [chatStore.currentConversation?.id, chatStore.isStreaming, userStore.user?.id], () => { if (!chatStore.isStreaming) void refreshFiles(); }, {immediate:true});
 function suggest(text: string, useAgent: boolean) { inputText.value = text; agentMode.value = useAgent ? 'agent' : 'normal'; }
@@ -692,7 +704,7 @@ const handleNewChat = async () => {
 
 let sendingLock = false;
 const handleSendMessage = async () => {
-  if (sendingLock || uploadingFiles.value || chatStore.isStreaming || isLegacy.value) return;
+  if (sendingLock || uploadingFiles.value || removingFiles.value || chatStore.isStreaming || isLegacy.value) return;
   const text = inputText.value.trim();
   if (!text) return;
   if (!selectedModel.value?.available) { ElMessage.warning('请选择可用的服务端模型'); return; }
@@ -1768,12 +1780,12 @@ onMounted(async () => {
     border-radius: var(--radius-sm);
     transition: all var(--transition);
     margin: 0;
-    
+
     .el-checkbox__label {
       width: 100%;
     }
   }
-  
+
   :deep(.el-checkbox.is-checked) {
     background: var(--primary-bg);
     border-color: var(--primary-color);
@@ -1891,13 +1903,13 @@ onMounted(async () => {
 .welcome-mark { margin-bottom: 14px; color: #426696; font-size: 32px; }
 .welcome-copy h1 { font-size: clamp(26px, 2.5vw, 36px); letter-spacing: -1px; font-weight: 600; color: #18212f; margin: 0 0 14px; }
 .welcome-copy p { font-size: 14px; color: var(--assistant-muted); margin: 0; }
-.assistant-start { width: min(800px, 100%); margin-top: auto; }
+.assistant-start { width: min(1060px, 100%); margin-top: auto; }
 .assistant-suggestions { display: flex; flex-wrap: wrap; gap: 9px; margin-bottom: 22px; }
 .assistant-suggestions button { display: flex; align-items: center; gap: 9px; padding: 12px 15px; background: #fff; border: 1px solid var(--assistant-line); border-radius: 14px; font-size: 14px; color: #394556; cursor: pointer; }
 .assistant-suggestions button>span:last-child { margin-left: 9px; color: #62738a; }
 .assistant-suggestions button:hover { border-color: #8ea5c6; background: #edf3fc; }
 .assistant-footnote { font-size: 12px; color: var(--assistant-muted); text-align: center; margin: 10px 0 0; line-height: 1.5; }
-.assistant-main .chat-content { max-width: 860px; height: auto; min-height: 0; }
+.assistant-main .chat-content { max-width: 1120px; height: auto; min-height: 0; }
 .assistant-main .chat-messages { min-height: 0; padding: 18px 30px; }
 .assistant-main .chat-message { animation: none; gap: 0; margin-bottom: 32px; }
 .assistant-main .message-avatar, .assistant-main .message-role { display: none; }

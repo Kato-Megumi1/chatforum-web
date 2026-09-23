@@ -19,7 +19,7 @@
       <el-tab-pane :label="`文件 · ${workspace.files.length}`" name="files">
         <div v-if="!workspace.files.length" class="workspace-empty"><el-icon :size="32"><FolderOpened /></el-icon><h3>把这次需要的文件放进来</h3><p>上传图片、PDF、Word或代码，再回到对话提问或修改。</p><small>文档/图片单个20MB、共100MB；文本/代码单个64KB、共1MB</small></div>
         <div v-else class="workspace-files"><nav aria-label="代码文件"><button v-for="file in workspace.files" :key="file.path" :class="{selected:selectedPath===file.path}" @click="readFile(file.path)"><el-icon><Document /></el-icon><span>{{ file.path }}</span><small>v{{ file.revision }}</small></button></nav>
-          <div class="file-view"><header>{{ selectedPath || '选择文件查看' }} <el-button v-if="selectedPath" link type="primary" :disabled="busy" @click="downloadSelected">下载此文件</el-button></header><pre>{{ selectedContent }}</pre></div></div>
+          <div class="file-view"><header>{{ selectedPath || '选择文件查看' }} <template v-if="selectedPath"><el-button link type="primary" :disabled="busy" @click="downloadSelected">下载此文件</el-button><el-button link type="danger" :disabled="busy || refreshKey" @click="removeSelected">删除此文件</el-button></template></header><pre>{{ selectedContent }}</pre></div></div>
       </el-tab-pane>
       <el-tab-pane :label="`变更审查${pending ? ' · '+pending+' 待确认' : ''}`" name="changes">
         <div v-if="!workspace.changes.length" class="workspace-empty"><h3>还没有修改建议</h3><p>回到对话告诉编程 Agent 要修复或实现什么，建议会显示在这里。</p></div>
@@ -35,10 +35,10 @@
 </template>
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import request from '@/utils/request';
 import { codeArchive, codeDiff } from '@/utils/code-workspace';
-import { CHAT_FILE_ACCEPT, uploadChatFiles, downloadChatFile } from '@/utils/chat-files';
+import { CHAT_FILE_ACCEPT, uploadChatFiles, downloadChatFile, deleteChatFile } from '@/utils/chat-files';
 const props = defineProps<{ modelValue: boolean; conversationId: number; refreshKey: boolean }>();
 const emit = defineEmits(['update:modelValue', 'changed']);
 const workspace = ref<{ files:any[];changes:any[] }>({ files:[], changes:[] });
@@ -73,6 +73,22 @@ async function readFile(path:string) {
   await run(async(base,current)=>{const files=await request.get<Array<{path:string;content:string}>>(base+'/files');if(current()){selectedPath.value=path;selectedContent.value=files.find(f=>f.path===path)?.content||'';}});
 }
 async function downloadSelected(){const file=workspace.value.files.find(f=>f.path===selectedPath.value);if(!file?.kind){downloadChatFile(selectedPath.value,selectedContent.value);return;}await run(async(base,current)=>{const data=await request.get<Blob>(base+'/attachments/'+file.id+'/download',{responseType:'blob',timeout:60000});if(current())downloadChatFile(file.path,data);});}
+async function removeSelected() {
+  const file=workspace.value.files.find(f=>f.path===selectedPath.value),cid=props.conversationId;
+  if(!file || props.refreshKey)return;
+  await run(async(base,current)=>{
+    try { await ElMessageBox.confirm(`删除“${file.path}”及其同名修改版？本机原件和已发送的消息不受影响。`,'删除附件',{confirmButtonText:'删除',cancelButtonText:'取消',type:'warning'}); }
+    catch(e){if(e==='cancel'||e==='close')return;throw e;}
+    if(!current() || props.refreshKey)return;
+    await deleteChatFile(cid,file);
+    if(current()){
+      selectedPath.value='';selectedContent.value='';
+      if(selectedChange.value?.path===file.path)selectedChange.value=null;
+      emit('changed');ElMessage.success('附件已删除');
+    }
+    const data=await request.get(base);if(current())workspace.value=data;
+  });
+}
 async function downloadModified(){const file=selectedChange.value;if(!file)return;await run(async(base,current)=>{const data=await request.get<Blob>(base+'/changes/'+file.id+'/download',{responseType:'blob',timeout:60000});if(current())downloadChatFile(file.path,data);});}
 async function readChange(id:number) { await run(async(base,current)=>{const data=await request.get(base+'/changes/'+id);if(current())selectedChange.value=data;}); }
 async function decide(decision:'apply'|'reject') {
