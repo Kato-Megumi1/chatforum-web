@@ -1,8 +1,8 @@
 <template>
-  <div class="chat-layout">
+  <div class="chat-layout" :class="{ 'assistant-layout': isAssistant }">
     <header class="mobile-chat-header">
       <button class="mobile-icon-button mobile-conversations" @click="mobileSidebar = !mobileSidebar" :aria-expanded="mobileSidebar" aria-label="对话列表"><el-icon><Expand /></el-icon></button>
-      <button class="mobile-conversation-title" @click="mobileOptions = !mobileOptions" :aria-expanded="mobileOptions" :disabled="!chatStore.currentConversation" aria-label="对话选项">
+      <button class="mobile-conversation-title" @click="isAssistant ? showSettings = true : mobileOptions = !mobileOptions" :aria-expanded="mobileOptions" :disabled="!chatStore.currentConversation && !isAssistant" :aria-label="isAssistant ? '模型设置' : '对话选项'">
         <img v-if="selectedPersona === 'kato_megumi_persona'" :src="publicAsset('kato-megumi-avatar.jpg')" alt="" />
         <span><strong>{{ isLegacy ? '旧历史' : hasPersonaActive ? personaDisplayName : activeSpace === 'ROLEPLAY' ? '角色对话' : '普通 AI' }} <el-icon><ArrowDown /></el-icon></strong>
           <small>{{ isLegacy ? '仅供回顾' : hasPersonaActive || activeSpace === 'ROLEPLAY' ? '角色扮演 · 独立记忆' : '问答与任务 · 独立记忆' }}<template v-if="selectedKnowledgeBaseId"> · 已选知识库</template></small></span>
@@ -74,8 +74,18 @@
         <el-button v-if="CONNECTION_SETTINGS_ENABLED" class="mobile-connection-button" text @click="openConnection"><el-icon><Connection /></el-icon>连接设置</el-button>
       </div>
     </aside>
-    <main class="chat-main" :class="{ 'persona-theme': hasPersonaActive }">
-      <div v-if="!chatStore.currentConversation" class="chat-empty">
+    <main class="chat-main" :class="{ 'persona-theme': hasPersonaActive, 'assistant-main': isAssistant }">
+      <header v-if="isAssistant" class="assistant-page-heading"><span>{{ chatStore.currentConversation?.title === 'New Conversation' ? '新对话' : chatStore.currentConversation?.title || 'AI 助手' }}</span><button aria-label="对话设置" @click="showSettings = true"><el-icon><MoreFilled /></el-icon></button></header>
+      <div v-if="isAssistant && !chatStore.isLoadingConversation && !chatStore.messages.length" class="assistant-welcome">
+        <div class="welcome-copy"><div class="welcome-mark">✦</div><h1>有什么我能帮你的吗？</h1><p>一个问题，一个想法，都可以从这里开始。</p></div>
+        <div class="assistant-start">
+          <div class="assistant-suggestions"><button @click="suggest('帮我看看论坛最新的7条帖子', true)"><el-icon><ChatLineSquare /></el-icon>逛逛社区<span>↗</span></button><button @click="openCoding"><span class="code-symbol">&lt;/&gt;</span>一起写代码<span>↗</span></button><button @click="suggest('帮我梳理一下这个想法：', false)"><el-icon><EditPen /></el-icon>梳理一个想法<span>↗</span></button></div>
+          <AssistantComposer v-model="inputText" v-model:mode="agentMode" v-model:knowledge-base-id="selectedKnowledgeBaseId"
+            :busy="chatStore.isStreaming" :coding="codingEnabled" :knowledge-bases="knowledgeBases" @enter="handleKeyDown" @send="handleSendMessage" @stop="handleStopGeneration" @settings="showSettings = true" @coding="openCoding" @disable-coding="codingEnabled = false" />
+          <p class="assistant-footnote">{{ agentMode === 'agent' ? 'Agent 可调用已启用工具；编程修改由你确认。' : '普通模式专注对话；需要工具时可切换 Agent。' }}</p>
+        </div>
+      </div>
+      <div v-else-if="!chatStore.currentConversation" class="chat-empty">
         <div class="empty-icon">
           <el-icon :size="56" color="var(--primary-color)">
             <ChatDotRound />
@@ -90,7 +100,6 @@
       </div>
       <div v-else class="chat-content">
         <div v-if="isLegacy" class="identity-notice">旧会话已保留。身份混合或缺少标记的历史不会自动进入新记忆，请在对应模式新建会话。</div>
-        <div v-else-if="!hasPersonaActive" class="assistant-mode-bar"><el-icon><Service /></el-icon><strong>普通 AI 助手</strong><span>问答与任务 · 独立记忆</span></div>
         <div v-if="hasPersonaActive" class="persona-bar">
           <div class="persona-bar-avatar">
             <img v-if="selectedPersona === 'kato_megumi_persona'" :src="publicAsset('kato-megumi-avatar.jpg')" alt="加藤惠" />
@@ -99,7 +108,7 @@
           <span class="persona-bar-text">正在与 <strong>{{ personaDisplayName }}</strong> 对话中</span>
           <el-tag size="small" type="danger" effect="plain">角色扮演模式</el-tag>
         </div>
-        <div class="chat-toolbar" :class="{ 'mobile-open': mobileOptions }">
+        <div v-if="!isAssistant" class="chat-toolbar" :class="{ 'mobile-open': mobileOptions }">
           <div class="mobile-options-heading"><strong>对话选项</strong><button class="mobile-icon-button" @click="mobileOptions = false" aria-label="收起对话选项"><el-icon><Close /></el-icon></button></div>
           <div class="toolbar-left">
             <div class="toolbar-item persona-select">
@@ -202,7 +211,12 @@
           <div class="scroll-anchor" ref="scrollAnchor"></div>
         </div>
         <div class="chat-input-area">
-          <div class="chat-input-wrapper">
+          <template v-if="isAssistant">
+            <AssistantComposer v-model="inputText" v-model:mode="agentMode" v-model:knowledge-base-id="selectedKnowledgeBaseId"
+              :busy="chatStore.isStreaming" :coding="codingEnabled" :knowledge-bases="knowledgeBases" @enter="handleKeyDown" @send="handleSendMessage" @stop="handleStopGeneration" @settings="showSettings = true" @coding="openCoding" @disable-coding="codingEnabled = false" />
+            <p class="assistant-footnote">{{ codingEnabled && agentMode === 'agent' ? '编程修改保存在待确认列表，打开工作区查看。代码不会自动执行。' : '内容由 AI 生成，重要信息请核实。' }}</p>
+          </template>
+          <div v-else class="chat-input-wrapper">
             <el-input
               v-model="inputText"
               type="textarea"
@@ -237,6 +251,7 @@
         </div>
       </div>
     </main>
+    <CodeWorkspace v-if="isAssistant && chatStore.currentConversation" v-model="showCode" :conversation-id="chatStore.currentConversation.id" :refresh-key="chatStore.isStreaming" />
     <el-drawer v-model="showSettings" title="模型设置" size="min(420px, 100vw)" class="settings-drawer">
       <el-form label-position="top">
         <el-form-item label="对话模型（仅选择，不配置密钥）">
@@ -295,6 +310,8 @@ import { forumPostPath, resolveForumLinks } from '@/utils/forum-links';
 import { initialChat, type ChatSpace } from '@/utils/chat-navigation';
 import DOMPurify from 'dompurify';
 import RagEvidence from '@/components/RagEvidence.vue';
+import AssistantComposer from '@/components/AssistantComposer.vue';
+import CodeWorkspace from '@/components/CodeWorkspace.vue';
 import { publicAsset, CONNECTION_SETTINGS_ENABLED } from '@/utils/api';
 import { useChatStore } from '@/stores/chat';
 import { useUserStore } from '@/stores/user';
@@ -319,6 +336,7 @@ const messagePlaceholder = window.matchMedia('(pointer: coarse)').matches
   ? '输入消息… 回车换行，点箭头发送'
   : '输入消息… (Enter 发送, Shift+Enter 换行)';
 const showSettings = ref(false);
+const showCode = ref(false), draftMode = ref('normal'), draftKnowledgeBase = ref(0), draftCoding = ref(false);
 const showRenameDialog = ref(false);
 const renameTitle = ref('');
 const renamingConversation = ref<any>(null);
@@ -330,6 +348,7 @@ const clickedMsgId = ref<number | null>(null);
 const activeSpace = computed({ get: () => chatStore.navigation.space, set: (space: ChatSpace) => chatStore.setSpace(space) });
 const hasLegacy = computed(() => chatStore.conversations.some(c => !c.conversationType || c.conversationType === 'LEGACY'));
 const isLegacy = computed(() => !!chatStore.currentConversation && (!chatStore.currentConversation.conversationType || chatStore.currentConversation.conversationType === 'LEGACY'));
+const isAssistant = computed(() => chatStore.currentConversation ? chatStore.currentConversation.conversationType === 'ASSISTANT' : activeSpace.value === 'ASSISTANT');
 const visibleConversations = computed(() => chatStore.conversations.filter(c => (c.conversationType || 'LEGACY') === activeSpace.value));
 const switchSpace = async (space: 'ASSISTANT' | 'ROLEPLAY' | 'LEGACY') => {
   saveView();
@@ -340,6 +359,7 @@ const switchSpace = async (space: 'ASSISTANT' | 'ROLEPLAY' | 'LEGACY') => {
 };
 watch(() => chatStore.currentConversation?.id, (id, previousId) => {
   saveView(previousId);
+  showCode.value = false;
   if (chatStore.currentConversation) activeSpace.value = chatStore.currentConversation.conversationType || 'LEGACY';
   inputText.value = id ? chatStore.drafts[id] || '' : '';
 }, { flush: 'sync' });
@@ -371,11 +391,12 @@ const messageIdentity = (msg: any) => {
 const agentMode = computed({
   get: () => {
     const cid = chatStore.currentConversation?.id;
-    return cid ? chatStore.getConversationSettings(cid).agentMode : 'normal';
+    return cid ? chatStore.getConversationSettings(cid).agentMode : draftMode.value;
   },
   set: (val: string) => {
     const cid = chatStore.currentConversation?.id;
     if (cid) chatStore.saveConversationSettings(cid, { agentMode: val });
+    else draftMode.value = val;
   },
 });
 
@@ -414,11 +435,12 @@ const customPersonaPrompt = computed({
 const selectedKnowledgeBaseId = computed({
   get: () => {
     const cid = chatStore.currentConversation?.id;
-    return cid ? chatStore.getConversationSettings(cid).knowledgeBaseId : 0;
+    return cid ? chatStore.getConversationSettings(cid).knowledgeBaseId : draftKnowledgeBase.value;
   },
   set: (val: number) => {
     const cid = chatStore.currentConversation?.id;
     if (cid) chatStore.saveConversationSettings(cid, { knowledgeBaseId: val || 0 });
+    else draftKnowledgeBase.value = val || 0;
   },
 });
 
@@ -438,8 +460,37 @@ const selectedKnowledgeIssue = computed(() => {
 });
 
 const toolSkills = computed(() => {
-  return skills.value.filter(s => s.category !== '角色扮演');
+  return skills.value.filter(s => s.category !== '角色扮演' && s.name !== 'code_workspace');
 });
+const codingEnabled = computed({
+  get: () => chatStore.currentConversation ? !!chatStore.getConversationSettings(chatStore.currentConversation.id).codingEnabled : draftCoding.value,
+  set: (value: boolean) => { if (chatStore.currentConversation) chatStore.saveConversationSettings(chatStore.currentConversation.id, { codingEnabled: value }); else draftCoding.value = value; },
+});
+let creatingAssistant: Promise<void> | undefined;
+async function ensureAssistantConversation() {
+  if (creatingAssistant) return creatingAssistant;
+  if (chatStore.currentConversation) return;
+  creatingAssistant = createAssistant();
+  try { await creatingAssistant; } finally { creatingAssistant = undefined; }
+}
+async function createAssistant() {
+  const mode = draftMode.value, kb = draftKnowledgeBase.value, coding = draftCoding.value, draft = inputText.value;
+  const conversation = await chatStore.createConversation(undefined, { conversationType: 'ASSISTANT' });
+  if (!ownsView() || !isAssistant.value || chatStore.currentConversation) throw new Error('已切换页面，请在当前会话重试');
+  chatStore.saveConversationSettings(conversation.id, { agentMode: mode, knowledgeBaseId: kb, codingEnabled: coding });
+  await chatStore.selectConversation(conversation);
+  if (!ownsView() || chatStore.navigation.conversationId !== conversation.id) throw new Error('已切换会话，请重试');
+  inputText.value = draft;
+}
+let openingCode = false;
+async function openCoding() {
+  if (openingCode || chatStore.isStreaming || !isAssistant.value) return;
+  openingCode = true;
+  try { await ensureAssistantConversation(); agentMode.value = 'agent'; codingEnabled.value = true; showCode.value = true; }
+  catch (e: any) { ElMessage.error(e.message || '工作区打开失败'); }
+  finally { openingCode = false; }
+}
+function suggest(text: string, useAgent: boolean) { inputText.value = text; agentMode.value = useAgent ? 'agent' : 'normal'; }
 
 const personaMap: Record<string, { name: string; color: string }> = {
   kato_megumi_persona: { name: '加藤惠', color: '#E8A0BF' },
@@ -621,6 +672,8 @@ const handleSendMessage = async () => {
   }
 
   sendingLock = true;
+  try { if (!chatStore.currentConversation && isAssistant.value) await ensureAssistantConversation(); }
+  catch (e: any) { sendingLock = false; ElMessage.error(e.message || '创建会话失败'); return; }
   inputText.value = '';
   const sendingConversationId = chatStore.currentConversation?.id;
   try {
@@ -631,7 +684,10 @@ const handleSendMessage = async () => {
       await chatStore.configureIdentity(chatStore.currentConversation.id, { conversationType: 'ROLEPLAY', persona: 'custom',
         personaLabel: customPersonaName.value, customPersonaPrompt: systemPrompt });
     if (chatStore.currentConversation?.id !== sendingConversationId) throw new Error('会话已切换，请在原会话重新发送');
-    const skills = agentMode.value === 'agent' ? enabledSkills.value : [];
+    const skills = agentMode.value === 'agent' ? [
+      ...enabledSkills.value.filter(s => s !== 'code_workspace'),
+      ...(isAssistant.value && codingEnabled.value ? ['code_workspace'] : []),
+    ] : [];
     const kbId = selectedKnowledgeBaseId.value > 0 ? selectedKnowledgeBaseId.value : undefined;
     await chatStore.sendConfigured(text, agentMode.value === 'agent' ? 'agent' : 'normal', skills, persona, systemPrompt, kbId);
   } catch (e: any) {
@@ -717,7 +773,7 @@ const loadSkills = async () => {
     const data = await request.get<any[]>('/chat/skills');
     skills.value = data;
     // Only auto-enable tool skills, not persona skills
-    enabledSkills.value = data.filter(s => s.enabled && s.category !== '角色扮演').map(s => s.name);
+    enabledSkills.value = data.filter(s => s.enabled && s.category !== '角色扮演' && s.name !== 'code_workspace').map(s => s.name);
   } catch {
     // Ignore
   }
@@ -1793,5 +1849,55 @@ onMounted(async () => {
   .chat-empty h2 { font-size: 25px; font-weight: 500; color: #393239; }
   .chat-empty p { font-size: 13px; line-height: 1.8; }
   .btn-start { background: #a66b83; border: 0; box-shadow: none; }
+}
+/* Ordinary AI is a separate presentation layer; roleplay/legacy styling above is unchanged. */
+.assistant-main { background: #fff; min-width: 0; }
+.assistant-page-heading { height: 54px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 0 30px; color: #858792; font-size: 13px; }
+.assistant-page-heading span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.assistant-page-heading button { display: grid; place-items: center; border: 0; background: none; width: 32px; height: 32px; border-radius: 9px; color: #8d8f98; cursor: pointer; }
+.assistant-page-heading button:hover { background: #f5f5f7; }
+.assistant-welcome { min-height: 0; flex: 1; display: flex; flex-direction: column; align-items: center; overflow: auto; padding: 20px 32px 24px; }
+.welcome-copy { margin-top: auto; text-align: center; padding: 30px 0 38px; }
+.welcome-mark { margin-bottom: 14px; color: #5c719c; font-size: 32px; }
+.welcome-copy h1 { font-size: clamp(26px, 2.5vw, 36px); letter-spacing: -1px; font-weight: 600; color: #25262e; margin: 0 0 14px; }
+.welcome-copy p { font-size: 14px; color: #a0a2ab; margin: 0; }
+.assistant-start { width: min(800px, 100%); margin-top: auto; }
+.assistant-suggestions { display: flex; flex-wrap: wrap; gap: 9px; margin-bottom: 22px; }
+.assistant-suggestions button { display: flex; align-items: center; gap: 9px; padding: 12px 15px; background: #fff; border: 1px solid #ededf1; border-radius: 14px; font-size: 13px; color: #6b6e79; cursor: pointer; }
+.assistant-suggestions button>span:last-child { margin-left: 9px; color: #b6b8c0; }
+.assistant-suggestions button:hover { border-color: #cdd6e8; background: #fafbfe; }
+.assistant-footnote { font-size: 11px; color: #afb0b8; text-align: center; margin: 10px 0 0; line-height: 1.5; }
+.assistant-main .chat-content { max-width: 860px; height: auto; min-height: 0; }
+.assistant-main .chat-messages { min-height: 0; padding: 18px 30px; }
+.assistant-main .chat-message { animation: none; gap: 0; margin-bottom: 32px; }
+.assistant-main .message-avatar, .assistant-main .message-role { display: none; }
+.assistant-main .message-body { max-width: 100%; min-width: 0; }
+.assistant-main .chat-message.assistant .message-body { width: 100%; }
+.assistant-main .chat-message.assistant .message-bubble { padding: 5px 0; background: transparent; border: 0; box-shadow: none; border-radius: 0; font-size: 15px; color: #30333a; }
+.assistant-main .chat-message.user .message-body { max-width: 85%; }
+.assistant-main .chat-message.user .message-bubble { background: #f4f4f6; color: #34363f; border-radius: 20px 20px 5px 20px; box-shadow: none; padding: 12px 18px; font-size: 15px; }
+.assistant-main .message-bubble:hover { transform: none; box-shadow: none; }
+.assistant-main .chat-input-area { padding: 12px 30px 20px; background: white; }
+.assistant-layout .chat-sidebar { background: #f8f9fb; border-color: #f0f0f4; }
+.assistant-layout .btn-new-chat { background: white; border: 1px solid #e5e7ed; box-shadow: none; color: #4a5364; border-radius: 12px; }
+.assistant-layout .btn-new-chat:hover { transform: none; background: #f0f3f9; }
+.assistant-layout .conversation-item.active { background: #ecf0f7; }
+.assistant-layout .conversation-item.active .conversation-title { color: #435779; }
+.assistant-layout .conversation-icon { background: #edf0f5; color: #8a94a5; box-shadow: none; }
+.assistant-layout .conversation-spaces { background: #eeeef2; }
+@media(max-width: 900px) {
+  .assistant-layout { background: white; }
+  .assistant-layout .mobile-chat-header { background: white; border-bottom-color: #f3f3f5; }
+  .assistant-page-heading { display: none; }
+  .assistant-welcome { padding: 0 16px 12px; }
+  .welcome-copy { padding: 20px 0 38px; }
+  .welcome-copy h1 { font-size: 26px; }
+  .welcome-copy p { font-size: 12px; }
+  .assistant-suggestions { gap: 8px; margin-bottom: 16px; }
+  .assistant-suggestions button { font-size: 12px; padding: 10px 12px; gap: 6px; }
+  .assistant-main .chat-input-area { padding: 9px 12px 10px; }
+  .assistant-main .chat-messages { padding: 20px 19px 8px; }
+  .assistant-main .chat-message.assistant .message-bubble { font-size: 15px; line-height: 1.85; }
+  .assistant-footnote { font-size: 10px; margin-top: 8px; }
 }
 </style>

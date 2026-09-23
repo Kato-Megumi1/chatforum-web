@@ -10,7 +10,7 @@ interface Conversation { id: number; title: string; isPinned: boolean; userId: n
 interface Message { id: number; role: 'system' | 'user' | 'assistant'; content: string; reasoningContent?: string;
   ragMetadata?: any; conversationId: number; createdAt: string; pending?: boolean }
 interface ConversationSettings { agentMode: string; selectedPersona: string; customPersonaName: string;
-  customPersonaPrompt: string; knowledgeBaseId: number; modelId?: string }
+  customPersonaPrompt: string; knowledgeBaseId: number; modelId?: string; codingEnabled?: boolean }
 interface ChatModel { id: string; label: string; available: boolean; unavailableReason: string | null }
 interface Run { id: string; status: string; error?: string; result?: { content: string; ragMetadata?: any } }
 
