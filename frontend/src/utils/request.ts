@@ -27,6 +27,7 @@ http.interceptors.request.use(
 http.interceptors.response.use(
   (response) => {
     const res = response.data;
+    if (response.config.responseType === 'blob') return res;
     if (res.success) {
       return normalizeMedia(res.data);
     } else {
@@ -36,6 +37,9 @@ http.interceptors.response.use(
   },
   async (error) => {
     const originalRequest = error.config;
+    if (error.response?.data instanceof Blob) {
+      try { error.response.data = JSON.parse(await error.response.data.text()); } catch { /* safe generic error below */ }
+    }
 
     if (error.response?.status === 401 && !originalRequest._retry) {
       const userStore = useUserStore();

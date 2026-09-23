@@ -81,7 +81,7 @@
         <div class="assistant-start">
           <div class="assistant-suggestions"><button @click="suggest('帮我看看论坛最新的7条帖子', true)"><el-icon><ChatLineSquare /></el-icon>逛逛社区<span>↗</span></button><button @click="openCoding"><span class="code-symbol">&lt;/&gt;</span>一起写代码<span>↗</span></button><button @click="suggest('帮我梳理一下这个想法：', false)"><el-icon><EditPen /></el-icon>梳理一个想法<span>↗</span></button></div>
           <AssistantComposer v-model="inputText" v-model:mode="agentMode" v-model:knowledge-base-id="selectedKnowledgeBaseId"
-            :busy="chatStore.isStreaming" :coding="codingEnabled" :workspace-label="workspaceLabel" :knowledge-bases="knowledgeBases" @enter="handleKeyDown" @send="handleSendMessage" @stop="handleStopGeneration" @settings="showSettings = true" @coding="openCoding" @disable-coding="disableCoding" />
+            :busy="chatStore.isStreaming || uploadingFiles" :coding="codingEnabled" :files="chatFiles" :uploading="uploadingFiles" :knowledge-bases="knowledgeBases" @upload="uploadFiles" @files="showCode = true" @enter="handleKeyDown" @send="handleSendMessage" @stop="handleStopGeneration" @settings="showSettings = true" @coding="openCoding" @disable-coding="disableCoding" />
           <p class="assistant-footnote">{{ agentMode === 'agent' ? 'Agent 可调用已启用工具；编程修改由你确认。' : '普通模式专注对话；需要工具时可切换 Agent。' }}</p>
         </div>
       </div>
@@ -186,6 +186,7 @@
                 </div>
                 <div class="message-text" v-html="renderMarkdown(getCleanContent(msg.content))"></div>
                 <RagEvidence :metadata="msg.ragMetadata" />
+                <FileArtifacts v-if="isAssistant" :conversation-id="chatStore.currentConversation!.id" :artifacts="msg.ragMetadata?.fileArtifacts" />
                 </template>
               </div>
               <div
@@ -213,8 +214,8 @@
         <div class="chat-input-area">
           <template v-if="isAssistant">
             <AssistantComposer v-model="inputText" v-model:mode="agentMode" v-model:knowledge-base-id="selectedKnowledgeBaseId"
-              :busy="chatStore.isStreaming" :coding="codingEnabled" :workspace-label="workspaceLabel" :knowledge-bases="knowledgeBases" @enter="handleKeyDown" @send="handleSendMessage" @stop="handleStopGeneration" @settings="showSettings = true" @coding="openCoding" @disable-coding="disableCoding" />
-            <p class="assistant-footnote">{{ codingEnabled && agentMode === 'agent' ? (activeLocal ? 'Agent 可直接保存已授权目录中的文件；保持此页面打开。不会执行终端命令。' : '选择本机文件夹后才能直接读写；云端副本需单独选择。') : '内容由 AI 生成，重要信息请核实。' }}</p>
+              :busy="chatStore.isStreaming || uploadingFiles" :coding="codingEnabled" :files="chatFiles" :uploading="uploadingFiles" :knowledge-bases="knowledgeBases" @upload="uploadFiles" @files="showCode = true" @enter="handleKeyDown" @send="handleSendMessage" @stop="handleStopGeneration" @settings="showSettings = true" @coding="openCoding" @disable-coding="disableCoding" />
+            <p class="assistant-footnote">{{ codingEnabled ? '文件仅操作上传副本，修改版可下载；不改动本机原文件，不运行代码。' : '内容由 AI 生成，重要信息请核实。' }}</p>
           </template>
           <div v-else class="chat-input-wrapper">
             <el-input
@@ -251,7 +252,7 @@
         </div>
       </div>
     </main>
-    <LocalCodeWorkspace v-if="isAssistant && chatStore.currentConversation" v-model="showCode" :conversation-id="chatStore.currentConversation.id" :owner-id="userStore.user?.id || 0" :busy="chatStore.isStreaming" @cloud="cloudWorkspaceId = chatStore.currentConversation.id" />
+    <CodeWorkspace v-if="isAssistant && chatStore.currentConversation" v-model="showCode" :conversation-id="chatStore.currentConversation.id" :refresh-key="chatStore.isStreaming" @changed="refreshFiles" />
     <el-drawer v-model="showSettings" title="模型设置" size="min(420px, 100vw)" class="settings-drawer">
       <el-form label-position="top">
         <el-form-item label="对话模型（仅选择，不配置密钥）">
@@ -311,8 +312,9 @@ import { initialChat, type ChatSpace } from '@/utils/chat-navigation';
 import DOMPurify from 'dompurify';
 import RagEvidence from '@/components/RagEvidence.vue';
 import AssistantComposer from '@/components/AssistantComposer.vue';
-import LocalCodeWorkspace from '@/components/LocalCodeWorkspace.vue';
-import { localConnection, disconnectLocalWorkspace } from '@/utils/local-workspace';
+import CodeWorkspace from '@/components/CodeWorkspace.vue';
+import FileArtifacts from '@/components/FileArtifacts.vue';
+import { uploadChatFiles } from '@/utils/chat-files';
 import { publicAsset, CONNECTION_SETTINGS_ENABLED } from '@/utils/api';
 import { useChatStore } from '@/stores/chat';
 import { useUserStore } from '@/stores/user';
@@ -326,10 +328,8 @@ const mobileSidebar = ref(false);
 const mobileOptions = ref(false);
 const openConnection = () => { window.dispatchEvent(new Event('chatforum:connection-settings')); mobileSidebar.value = false; };
 const userStore = useUserStore();
-const cloudWorkspaceId = ref(0);
-const activeLocal = computed(() => localConnection(chatStore.currentConversation?.id, userStore.user?.id));
-const workspaceLabel = computed(() => activeLocal.value ? '本机 · ' + activeLocal.value.name : cloudWorkspaceId.value === chatStore.currentConversation?.id ? '云端代码副本 · 非本机目录' : '');
-function disableCoding() { codingEnabled.value = false; cloudWorkspaceId.value = 0; disconnectLocalWorkspace(); }
+const chatFiles = ref<Array<{path:string;revision:number}>>([]), uploadingFiles = ref(false);
+function disableCoding() { codingEnabled.value = false; }
 const ownerId = userStore.user!.id;
 chatStore.initializeNavigation(ownerId);
 let viewActive = true, initializing = true, restoring = true;
@@ -495,6 +495,30 @@ async function openCoding() {
   catch (e: any) { ElMessage.error(e.message || '工作区打开失败'); }
   finally { openingCode = false; }
 }
+let fileEpoch = 0;
+async function refreshFiles() {
+  const cid = chatStore.currentConversation?.id, epoch = ++fileEpoch;
+  chatFiles.value = [];
+  if (!cid || !isAssistant.value || !ownsView()) return;
+  try { const value = await request.get<{files:Array<{path:string;revision:number}>}>('/coding/'+cid);
+    if (epoch === fileEpoch && ownsView() && cid === chatStore.currentConversation?.id && isAssistant.value) chatFiles.value = value.files || [];
+  } catch { /* The drawer provides a visible retry; never reuse another conversation's files. */ }
+}
+async function uploadFiles(files:File[]) {
+  if (uploadingFiles.value || chatStore.isStreaming || !isAssistant.value) return;
+  uploadingFiles.value = true;
+  try {
+    await ensureAssistantConversation();
+    const cid = chatStore.currentConversation!.id;
+    if (!ownsView() || cid !== chatStore.currentConversation?.id || !isAssistant.value) return;
+    await uploadChatFiles(cid, files);
+    if (!ownsView() || cid !== chatStore.currentConversation?.id) return;
+    codingEnabled.value = true;
+    await refreshFiles(); ElMessage.success('已上传，可直接提问或要求修改；原文件不变');
+  } catch(e:any) { ElMessage.error(e.message || '上传失败，请检查文件格式'); }
+  finally { uploadingFiles.value = false; await refreshFiles(); }
+}
+watch(() => [chatStore.currentConversation?.id, chatStore.isStreaming, userStore.user?.id], () => { if (!chatStore.isStreaming) void refreshFiles(); }, {immediate:true});
 function suggest(text: string, useAgent: boolean) { inputText.value = text; agentMode.value = useAgent ? 'agent' : 'normal'; }
 
 const personaMap: Record<string, { name: string; color: string }> = {
@@ -668,12 +692,9 @@ const handleNewChat = async () => {
 
 let sendingLock = false;
 const handleSendMessage = async () => {
-  if (sendingLock || chatStore.isStreaming || isLegacy.value) return;
+  if (sendingLock || uploadingFiles.value || chatStore.isStreaming || isLegacy.value) return;
   const text = inputText.value.trim();
   if (!text) return;
-  if (isAssistant.value && codingEnabled.value && agentMode.value === 'agent' && !activeLocal.value && cloudWorkspaceId.value !== chatStore.currentConversation?.id) {
-    await openCoding(); ElMessage.info('请先选择本机文件夹，或明确使用云端副本'); return;
-  }
   if (!selectedModel.value?.available) { ElMessage.warning('请选择可用的服务端模型'); return; }
   if (selectedKnowledgeBaseId.value && (knowledgeError.value || selectedKnowledgeIssue.value)) {
     ElMessage.warning(knowledgeError.value || selectedKnowledgeIssue.value); return;
@@ -692,13 +713,12 @@ const handleSendMessage = async () => {
       await chatStore.configureIdentity(chatStore.currentConversation.id, { conversationType: 'ROLEPLAY', persona: 'custom',
         personaLabel: customPersonaName.value, customPersonaPrompt: systemPrompt });
     if (chatStore.currentConversation?.id !== sendingConversationId) throw new Error('会话已切换，请在原会话重新发送');
-    const skills = agentMode.value === 'agent' ? [
-      ...enabledSkills.value.filter(s => s !== 'code_workspace'),
+    const skills = [
+      ...(agentMode.value === 'agent' ? enabledSkills.value.filter(s => s !== 'code_workspace') : []),
       ...(isAssistant.value && codingEnabled.value ? ['code_workspace'] : []),
-    ] : [];
+    ];
     const kbId = selectedKnowledgeBaseId.value > 0 ? selectedKnowledgeBaseId.value : undefined;
-    await chatStore.sendConfigured(text, agentMode.value === 'agent' ? 'agent' : 'normal', skills, persona, systemPrompt, kbId, undefined,
-      skills.includes('code_workspace') ? activeLocal.value?.id : undefined);
+    await chatStore.sendConfigured(text, agentMode.value === 'agent' ? 'agent' : 'normal', skills, persona, systemPrompt, kbId);
   } catch (e: any) {
     inputText.value = text;
     ElMessage.error(e.message || '发送失败');

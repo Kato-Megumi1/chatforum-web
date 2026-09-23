@@ -1,13 +1,13 @@
 <template>
-  <el-drawer :model-value="modelValue" @update:model-value="emit('update:modelValue', $event)" title="编程工作区" size="min(960px, 100vw)" class="code-workspace">
-    <div class="workspace-intro"><span class="workspace-icon">&lt;/&gt;</span><div><strong>从想法，到可审查的代码</strong><p>仅当前会话可访问 · 修改经你确认后应用</p></div></div>
-    <p class="workspace-safety">上传的相关代码片段会发给你选择的模型。请勿上传凭据或私密数据。本工作区不连接本机目录、不执行代码或终端命令。</p>
+  <el-drawer :model-value="modelValue" @update:model-value="emit('update:modelValue', $event)" title="会话文件" size="min(960px, 100vw)" class="code-workspace">
+    <div class="workspace-intro"><span class="workspace-icon">＋</span><div><strong>上传、修改，然后下载</strong><p>仅当前会话可访问 · 原附件保留，修改版可直接下载</p></div></div>
+    <p class="workspace-safety">相关文件内容会发给所选模型，请勿上传凭据或私密资料。图片/扫描PDF需选择Qwen。PDF/Word修改版重新生成基础段落排版，不保留原图和复杂样式。本工作区不操作本机目录、不执行代码。</p>
     <div class="workspace-actions">
-      <el-button type="primary" :disabled="busy" @click="uploadInput?.click()"><el-icon><Upload /></el-icon>上传代码</el-button>
+      <el-button type="primary" :disabled="busy || refreshKey" @click="uploadInput?.click()"><el-icon><Upload /></el-icon>上传文件</el-button>
       <el-button :disabled="busy" @click="showCreate = !showCreate">新建文件</el-button>
-      <el-button :disabled="busy || !workspace.files.length" @click="download">下载 ZIP</el-button>
+      <el-button :disabled="busy || !workspace.files.some(f=>!f.kind)" @click="download">文本代码 ZIP</el-button>
       <el-button :disabled="busy" @click="load">刷新</el-button>
-      <input ref="uploadInput" type="file" multiple hidden accept=".js,.jsx,.ts,.tsx,.cjs,.mjs,.json,.vue,.html,.css,.scss,.md,.txt,.py,.java,.go,.rs,.sql,.yml,.yaml,.toml" @change="upload" />
+      <input ref="uploadInput" type="file" multiple hidden :accept="CHAT_FILE_ACCEPT" @change="upload" />
     </div>
     <div v-if="showCreate" class="create-code">
       <el-input v-model="newPath" placeholder="相对路径，例如 src/main.ts" aria-label="新文件路径" />
@@ -17,17 +17,17 @@
     <p v-if="error" class="workspace-error" role="alert">{{ error }}</p>
     <el-tabs v-model="tab">
       <el-tab-pane :label="`文件 · ${workspace.files.length}`" name="files">
-        <div v-if="!workspace.files.length" class="workspace-empty"><el-icon :size="32"><FolderOpened /></el-icon><h3>把这次需要的代码放进来</h3><p>上传代码让 Agent 排查问题，或回到对话描述需求，让它创建文件。</p><small>每个文件 64KB，最多 60 个，总计 1MB</small></div>
+        <div v-if="!workspace.files.length" class="workspace-empty"><el-icon :size="32"><FolderOpened /></el-icon><h3>把这次需要的文件放进来</h3><p>上传图片、PDF、Word或代码，再回到对话提问或修改。</p><small>文档/图片单个20MB、共100MB；文本/代码单个64KB、共1MB</small></div>
         <div v-else class="workspace-files"><nav aria-label="代码文件"><button v-for="file in workspace.files" :key="file.path" :class="{selected:selectedPath===file.path}" @click="readFile(file.path)"><el-icon><Document /></el-icon><span>{{ file.path }}</span><small>v{{ file.revision }}</small></button></nav>
-          <div class="file-view"><header>{{ selectedPath || '选择文件查看' }}</header><pre>{{ selectedContent }}</pre></div></div>
+          <div class="file-view"><header>{{ selectedPath || '选择文件查看' }} <el-button v-if="selectedPath" link type="primary" :disabled="busy" @click="downloadSelected">下载此文件</el-button></header><pre>{{ selectedContent }}</pre></div></div>
       </el-tab-pane>
       <el-tab-pane :label="`变更审查${pending ? ' · '+pending+' 待确认' : ''}`" name="changes">
         <div v-if="!workspace.changes.length" class="workspace-empty"><h3>还没有修改建议</h3><p>回到对话告诉编程 Agent 要修复或实现什么，建议会显示在这里。</p></div>
         <div v-for="change in workspace.changes" :key="change.id" class="change-row"><button @click="readChange(change.id)"><strong>{{ change.path }}</strong><span>{{ change.description }}</span></button><el-tag :type="change.status==='PENDING'?'warning':change.status==='APPLIED'?'success':'info'" size="small">{{ statusLabel(change.status) }}</el-tag></div>
         <section v-if="selectedChange" class="diff-view"><header><strong>{{ selectedChange.path }}</strong><small>基于 v{{ selectedChange.baseRevision }} · 从第 {{ diff.startLine }} 行起</small></header>
           <div class="diff-columns"><div><label>删除 / 原内容</label><pre class="diff-remove">{{ diff.removed || '（无）' }}</pre></div><div><label>新增 / 修改后</label><pre class="diff-add">{{ diff.added || '（无）' }}</pre></div></div>
-          <div v-if="selectedChange.status==='PENDING'" class="diff-actions"><el-button type="primary" :disabled="busy" @click="decide('apply')">确认应用这项修改</el-button><el-button :disabled="busy" @click="decide('reject')">拒绝修改</el-button></div>
-          <p>应用仅更新这个私有工作区，不修改本机项目；代码尚未运行或通过测试。</p>
+          <div class="diff-actions"><el-button type="primary" :disabled="busy" @click="downloadModified">下载修改版</el-button><template v-if="selectedChange.status==='PENDING'"><el-button v-if="!isDocument(selectedChange.path)" :disabled="busy || refreshKey" @click="decide('apply')">确认应用这项修改</el-button><el-button :disabled="busy || refreshKey" @click="decide('reject')">关闭此提案</el-button></template></div>
+          <p>PDF/Word修改版独立下载，原件不变，基础排版不保留原图表样式。文本/代码应用仅更新会话副本；未运行代码或测试。</p>
         </section>
       </el-tab-pane>
     </el-tabs>
@@ -38,14 +38,16 @@ import { computed, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import request from '@/utils/request';
 import { codeArchive, codeDiff } from '@/utils/code-workspace';
+import { CHAT_FILE_ACCEPT, uploadChatFiles, downloadChatFile } from '@/utils/chat-files';
 const props = defineProps<{ modelValue: boolean; conversationId: number; refreshKey: boolean }>();
-const emit = defineEmits(['update:modelValue']);
+const emit = defineEmits(['update:modelValue', 'changed']);
 const workspace = ref<{ files:any[];changes:any[] }>({ files:[], changes:[] });
 const busy=ref(false),error=ref(''),tab=ref('files'),uploadInput=ref<HTMLInputElement>();
 const selectedPath=ref(''),selectedContent=ref(''),selectedChange=ref<any>(null),showCreate=ref(false),newPath=ref(''),newContent=ref('');
 const pending=computed(()=>workspace.value.changes.filter(c=>c.status==='PENDING').length);
 const diff=computed(()=>codeDiff(selectedChange.value?.before||'',selectedChange.value?.after||''));
-const statusLabel=(status:string)=>({PENDING:'待确认',APPLIED:'已应用',REJECTED:'已拒绝'}[status]||status);
+const statusLabel=(status:string)=>({PENDING:'待确认',APPLIED:'已应用',REJECTED:'已关闭'}[status]||status);
+const isDocument=(path:string)=>/\.(pdf|docx)$/i.test(path);
 let epoch=0;
 async function run(operation:(base:string,current:()=>boolean)=>Promise<void>) {
   if (busy.value || !props.conversationId) return;
@@ -57,23 +59,25 @@ async function run(operation:(base:string,current:()=>boolean)=>Promise<void>) {
 }
 async function load() { await run(async(base,current)=>{const data=await request.get(base);if(current())workspace.value=data;}); }
 async function importCode(files:Array<{path:string;content:string}>) {
-  await run(async(base,current)=>{await request.post(base+'/files',{files});const data=await request.get(base);if(current()){workspace.value=data;showCreate.value=false;newPath.value='';newContent.value='';ElMessage.success('已保存到私有代码工作区');}});
+  await run(async(base,current)=>{await request.post(base+'/files',{files});const data=await request.get(base);if(current()){workspace.value=data;showCreate.value=false;newPath.value='';newContent.value='';emit('changed');ElMessage.success('文件已保存到当前会话');}});
 }
 async function upload(event:Event) {
   const input=event.target as HTMLInputElement,files=Array.from(input.files||[]),cid=props.conversationId;input.value='';
   if(!files.length)return;
-  try {
-    if(files.length>60||files.some(f=>f.size>64000)||files.reduce((n,f)=>n+f.size,0)>1000000)throw Error('请选择本次相关的UTF-8文本代码，单文件64KB、总计1MB以内');
-    const data=await Promise.all(files.map(async f=>({path:f.webkitRelativePath||f.name,content:new TextDecoder('utf-8',{fatal:true}).decode(await f.arrayBuffer())})));
-    if(cid===props.conversationId)await importCode(data);
-  }catch(e:any){error.value=e.message||'文件读取失败，请检查UTF-8编码';}
+  await run(async(base,current)=>{try{await uploadChatFiles(cid,files);}finally{const data=await request.get(base);if(current()){workspace.value=data;emit('changed');}}});
 }
 const create=()=>importCode([{path:newPath.value.trim(),content:newContent.value}]);
-async function readFile(path:string) { await run(async(base,current)=>{const files=await request.get<Array<{path:string;content:string}>>(base+'/files');if(current()){selectedPath.value=path;selectedContent.value=files.find(f=>f.path===path)?.content||'';}}); }
+async function readFile(path:string) {
+  const file=workspace.value.files.find(f=>f.path===path);
+  if(file?.kind){selectedPath.value=path;selectedContent.value=`原件已保存 · ${file.kind.toUpperCase()} · ${(file.bytes/1024).toFixed(1)} KB\n${file.pageCount?file.pageCount+' 页\n':''}${file.needsVision?'图片/扫描页需在模型设置选择Qwen。\n':''}可下载原件查看，或回到对话提问。附件不会自动加入小说知识库。`;return;}
+  await run(async(base,current)=>{const files=await request.get<Array<{path:string;content:string}>>(base+'/files');if(current()){selectedPath.value=path;selectedContent.value=files.find(f=>f.path===path)?.content||'';}});
+}
+async function downloadSelected(){const file=workspace.value.files.find(f=>f.path===selectedPath.value);if(!file?.kind){downloadChatFile(selectedPath.value,selectedContent.value);return;}await run(async(base,current)=>{const data=await request.get<Blob>(base+'/attachments/'+file.id+'/download',{responseType:'blob',timeout:60000});if(current())downloadChatFile(file.path,data);});}
+async function downloadModified(){const file=selectedChange.value;if(!file)return;await run(async(base,current)=>{const data=await request.get<Blob>(base+'/changes/'+file.id+'/download',{responseType:'blob',timeout:60000});if(current())downloadChatFile(file.path,data);});}
 async function readChange(id:number) { await run(async(base,current)=>{const data=await request.get(base+'/changes/'+id);if(current())selectedChange.value=data;}); }
 async function decide(decision:'apply'|'reject') {
   const id=selectedChange.value?.id;if(!id)return;
-  await run(async(base,current)=>{const result=await request.post(base+'/changes/'+id+'/decision',{decision});const data=await request.get(base);if(current()){workspace.value=data;selectedChange.value.status=result.status;selectedPath.value='';selectedContent.value='';}});
+  await run(async(base,current)=>{const result=await request.post(base+'/changes/'+id+'/decision',{decision});const data=await request.get(base);if(current()){workspace.value=data;selectedChange.value.status=result.status;selectedPath.value='';selectedContent.value='';emit('changed');}});
 }
 async function download() { await run(async(base,current)=>{const files=await request.get<Array<{path:string;content:string}>>(base+'/files');if(!current())return;const url=URL.createObjectURL(codeArchive(files));const a=document.createElement('a');a.href=url;a.download='chatforum-workspace-'+props.conversationId+'.zip';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}); }
 watch(()=>props.conversationId,()=>{epoch++;busy.value=false;workspace.value={files:[],changes:[]};selectedChange.value=null;selectedPath.value='';selectedContent.value='';newContent.value='';newPath.value='';showCreate.value=false;});
