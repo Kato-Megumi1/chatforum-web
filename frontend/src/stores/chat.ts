@@ -2,6 +2,7 @@ import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import request from '@/utils/request';
 import { watchChatRun } from '@/utils/chat-stream';
+import { disconnectLocalWorkspace } from '@/utils/local-workspace';
 import { CHAT_NAVIGATION_KEY, emptyChatNavigation, readChatNavigation, type ChatSpace } from '@/utils/chat-navigation';
 
 interface Conversation { id: number; title: string; isPinned: boolean; userId: number; createdAt: string; updatedAt: string;
@@ -112,6 +113,7 @@ export const useChatStore = defineStore('chat', () => {
     } finally { if (stamp === selection) isLoadingConversation.value = false; }
   };
   const stopGeneration = () => {
+    disconnectLocalWorkspace();
     abortController.value?.abort();
     if (activeRun) void request.delete('/chat/runs/' + activeRun).catch(() => undefined);
     // The pending sender's finally owns the lock; don't admit a second request early.
@@ -131,7 +133,7 @@ export const useChatStore = defineStore('chat', () => {
   };
 
   const send = async (question: string, mode: 'normal' | 'agent', enabledSkills?: string[],
-    persona?: string, customSystemPrompt?: string, knowledgeBaseId?: number, onStream?: (text: string) => void) => {
+    persona?: string, customSystemPrompt?: string, knowledgeBaseId?: number, onStream?: (text: string) => void, codingWorkspaceId?: string) => {
     if (isStreaming.value || !question.trim()) return;
     isStreaming.value = true;
     const controller = new AbortController();
@@ -148,7 +150,7 @@ export const useChatStore = defineStore('chat', () => {
       messages.value.push(pendingQuestion.value, pendingReply.value);
       // Admit once; subscribe/reconnect to the durable run without repeating model calls.
       const run = await request.post<Run>('/chat/runs', { requestId: crypto.randomUUID(),
-        conversationId: cid, question, mode, enabledSkills, persona: persona || undefined,
+        conversationId: cid, question, mode, enabledSkills, codingWorkspaceId, persona: persona || undefined,
         customSystemPrompt: customSystemPrompt || undefined, knowledgeBaseId: knowledgeBaseId || undefined,
         modelId: getConversationSettings(cid).modelId || preferredModelId.value || llmConfig.value.defaultModelId });
       activeRun = run.id;
@@ -178,6 +180,7 @@ export const useChatStore = defineStore('chat', () => {
   const sendMessage = (question: string, onStream?: (text: string) => void) =>
     send(question, 'normal', [], undefined, undefined, undefined, onStream);
   const resetForUser = () => {
+    disconnectLocalWorkspace(false); // Credentials are changing; expired browser leases fail closed.
     identityEpoch++; navigation.value = emptyChatNavigation(0); drafts.value = {}; isLoadingConversation.value = false;
     try { sessionStorage.removeItem(CHAT_NAVIGATION_KEY); } catch { /* Storage may be blocked. */ }
     selection++; abortController.value?.abort(); activeRun = null;

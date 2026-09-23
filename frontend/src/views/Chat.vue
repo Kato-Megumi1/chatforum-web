@@ -81,7 +81,7 @@
         <div class="assistant-start">
           <div class="assistant-suggestions"><button @click="suggest('帮我看看论坛最新的7条帖子', true)"><el-icon><ChatLineSquare /></el-icon>逛逛社区<span>↗</span></button><button @click="openCoding"><span class="code-symbol">&lt;/&gt;</span>一起写代码<span>↗</span></button><button @click="suggest('帮我梳理一下这个想法：', false)"><el-icon><EditPen /></el-icon>梳理一个想法<span>↗</span></button></div>
           <AssistantComposer v-model="inputText" v-model:mode="agentMode" v-model:knowledge-base-id="selectedKnowledgeBaseId"
-            :busy="chatStore.isStreaming" :coding="codingEnabled" :knowledge-bases="knowledgeBases" @enter="handleKeyDown" @send="handleSendMessage" @stop="handleStopGeneration" @settings="showSettings = true" @coding="openCoding" @disable-coding="codingEnabled = false" />
+            :busy="chatStore.isStreaming" :coding="codingEnabled" :workspace-label="workspaceLabel" :knowledge-bases="knowledgeBases" @enter="handleKeyDown" @send="handleSendMessage" @stop="handleStopGeneration" @settings="showSettings = true" @coding="openCoding" @disable-coding="disableCoding" />
           <p class="assistant-footnote">{{ agentMode === 'agent' ? 'Agent 可调用已启用工具；编程修改由你确认。' : '普通模式专注对话；需要工具时可切换 Agent。' }}</p>
         </div>
       </div>
@@ -213,8 +213,8 @@
         <div class="chat-input-area">
           <template v-if="isAssistant">
             <AssistantComposer v-model="inputText" v-model:mode="agentMode" v-model:knowledge-base-id="selectedKnowledgeBaseId"
-              :busy="chatStore.isStreaming" :coding="codingEnabled" :knowledge-bases="knowledgeBases" @enter="handleKeyDown" @send="handleSendMessage" @stop="handleStopGeneration" @settings="showSettings = true" @coding="openCoding" @disable-coding="codingEnabled = false" />
-            <p class="assistant-footnote">{{ codingEnabled && agentMode === 'agent' ? '编程修改保存在待确认列表，打开工作区查看。代码不会自动执行。' : '内容由 AI 生成，重要信息请核实。' }}</p>
+              :busy="chatStore.isStreaming" :coding="codingEnabled" :workspace-label="workspaceLabel" :knowledge-bases="knowledgeBases" @enter="handleKeyDown" @send="handleSendMessage" @stop="handleStopGeneration" @settings="showSettings = true" @coding="openCoding" @disable-coding="disableCoding" />
+            <p class="assistant-footnote">{{ codingEnabled && agentMode === 'agent' ? (activeLocal ? 'Agent 可直接保存已授权目录中的文件；保持此页面打开。不会执行终端命令。' : '选择本机文件夹后才能直接读写；云端副本需单独选择。') : '内容由 AI 生成，重要信息请核实。' }}</p>
           </template>
           <div v-else class="chat-input-wrapper">
             <el-input
@@ -251,7 +251,7 @@
         </div>
       </div>
     </main>
-    <CodeWorkspace v-if="isAssistant && chatStore.currentConversation" v-model="showCode" :conversation-id="chatStore.currentConversation.id" :refresh-key="chatStore.isStreaming" />
+    <LocalCodeWorkspace v-if="isAssistant && chatStore.currentConversation" v-model="showCode" :conversation-id="chatStore.currentConversation.id" :owner-id="userStore.user?.id || 0" :busy="chatStore.isStreaming" @cloud="cloudWorkspaceId = chatStore.currentConversation.id" />
     <el-drawer v-model="showSettings" title="模型设置" size="min(420px, 100vw)" class="settings-drawer">
       <el-form label-position="top">
         <el-form-item label="对话模型（仅选择，不配置密钥）">
@@ -311,7 +311,8 @@ import { initialChat, type ChatSpace } from '@/utils/chat-navigation';
 import DOMPurify from 'dompurify';
 import RagEvidence from '@/components/RagEvidence.vue';
 import AssistantComposer from '@/components/AssistantComposer.vue';
-import CodeWorkspace from '@/components/CodeWorkspace.vue';
+import LocalCodeWorkspace from '@/components/LocalCodeWorkspace.vue';
+import { localConnection, disconnectLocalWorkspace } from '@/utils/local-workspace';
 import { publicAsset, CONNECTION_SETTINGS_ENABLED } from '@/utils/api';
 import { useChatStore } from '@/stores/chat';
 import { useUserStore } from '@/stores/user';
@@ -325,6 +326,10 @@ const mobileSidebar = ref(false);
 const mobileOptions = ref(false);
 const openConnection = () => { window.dispatchEvent(new Event('chatforum:connection-settings')); mobileSidebar.value = false; };
 const userStore = useUserStore();
+const cloudWorkspaceId = ref(0);
+const activeLocal = computed(() => localConnection(chatStore.currentConversation?.id, userStore.user?.id));
+const workspaceLabel = computed(() => activeLocal.value ? '本机 · ' + activeLocal.value.name : cloudWorkspaceId.value === chatStore.currentConversation?.id ? '云端代码副本 · 非本机目录' : '');
+function disableCoding() { codingEnabled.value = false; cloudWorkspaceId.value = 0; disconnectLocalWorkspace(); }
 const ownerId = userStore.user!.id;
 chatStore.initializeNavigation(ownerId);
 let viewActive = true, initializing = true, restoring = true;
@@ -666,6 +671,9 @@ const handleSendMessage = async () => {
   if (sendingLock || chatStore.isStreaming || isLegacy.value) return;
   const text = inputText.value.trim();
   if (!text) return;
+  if (isAssistant.value && codingEnabled.value && agentMode.value === 'agent' && !activeLocal.value && cloudWorkspaceId.value !== chatStore.currentConversation?.id) {
+    await openCoding(); ElMessage.info('请先选择本机文件夹，或明确使用云端副本'); return;
+  }
   if (!selectedModel.value?.available) { ElMessage.warning('请选择可用的服务端模型'); return; }
   if (selectedKnowledgeBaseId.value && (knowledgeError.value || selectedKnowledgeIssue.value)) {
     ElMessage.warning(knowledgeError.value || selectedKnowledgeIssue.value); return;
@@ -689,7 +697,8 @@ const handleSendMessage = async () => {
       ...(isAssistant.value && codingEnabled.value ? ['code_workspace'] : []),
     ] : [];
     const kbId = selectedKnowledgeBaseId.value > 0 ? selectedKnowledgeBaseId.value : undefined;
-    await chatStore.sendConfigured(text, agentMode.value === 'agent' ? 'agent' : 'normal', skills, persona, systemPrompt, kbId);
+    await chatStore.sendConfigured(text, agentMode.value === 'agent' ? 'agent' : 'normal', skills, persona, systemPrompt, kbId, undefined,
+      skills.includes('code_workspace') ? activeLocal.value?.id : undefined);
   } catch (e: any) {
     inputText.value = text;
     ElMessage.error(e.message || '发送失败');

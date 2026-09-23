@@ -23,12 +23,12 @@
       <button v-if="busy" class="composer-send stop" aria-label="停止生成" @click="emit('stop')"><span></span></button>
       <button v-else class="composer-send btn-send" aria-label="发送消息" :disabled="!modelValue.trim()" @pointerdown.prevent @click="emit('send')"><el-icon><Top /></el-icon></button>
     </div>
-    <div v-if="coding && mode === 'agent'" class="coding-attached"><el-icon><FolderOpened /></el-icon>已连接当前会话的私有代码工作区 <button aria-label="停用编程工具" @click="emit('disableCoding')" :disabled="busy">×</button></div>
+    <div v-if="coding && mode === 'agent'" class="coding-attached"><el-icon><FolderOpened /></el-icon><a href="#" @click.prevent="emit('coding')">{{ workspaceLabel || '选择本机文件夹，开始编程' }}</a><button aria-label="停用编程工具" @click="emit('disableCoding')" :disabled="busy">×</button></div>
   </div>
 </template>
 
 <script setup lang="ts">
-defineProps<{ modelValue: string; mode: string; busy: boolean; coding: boolean; knowledgeBaseId: number; knowledgeBases: any[] }>();
+defineProps<{ modelValue: string; mode: string; busy: boolean; coding: boolean; workspaceLabel?: string; knowledgeBaseId: number; knowledgeBases: any[] }>();
 const emit = defineEmits(['update:modelValue', 'update:mode', 'update:knowledgeBaseId', 'enter', 'send', 'stop', 'settings', 'coding', 'disableCoding']);
 </script>
 
@@ -54,6 +54,8 @@ button:focus-visible { outline: 2px solid #668bdf; outline-offset: 2px; }
 .stop span { width: 11px; height: 11px; background: white; border-radius: 2px; }
 .coding-attached { display: flex; align-items: center; gap: 6px; margin: 11px 5px 0; padding-top: 9px; border-top: 1px solid #dce3ed; font-size: 12px; color: #596980; }
 .coding-attached button { margin-left: auto; font-size: 18px; }
+.coding-attached a { color: inherit; text-decoration: none; overflow-wrap: anywhere; }
+.coding-attached a:hover { color: #234f89; text-decoration: underline; }
 .composer-kb-label { font-size: 13px; color: #526177; margin-bottom: 10px; }
 @media(max-width: 900px) { .assistant-composer { border-radius: 21px; padding: 13px 12px 10px; } .composer-tools { gap: 2px; } .tool-pill { font-size: 12px; padding: 7px; } .composer-modes button { padding: 6px 8px; font-size: 12px; } .settings-tool { display: none; } .composer-send { align-self: flex-end; } .coding-attached { font-size: 12px; } }
 @media(max-width: 370px) { .composer-tools { max-width: 230px; } }
