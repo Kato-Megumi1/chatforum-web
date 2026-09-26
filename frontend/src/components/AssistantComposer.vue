@@ -1,9 +1,9 @@
 <template>
   <div class="assistant-composer">
-    <div v-if="files?.length" class="attachment-list" aria-label="会话附件">
+    <div v-if="files?.length" class="attachment-list" aria-label="待发送附件">
       <div v-for="file in files" :key="`${file.kind || 'text'}-${file.id}`" class="attachment-chip">
         <button class="attachment-open" @click="emit('files')" :title="file.path"><el-icon><Document /></el-icon><span>{{ file.path }}</span></button>
-        <button class="attachment-remove" :disabled="busy || uploading || removing" :aria-label="`删除附件 ${file.path}`" @click="emit('remove',file)"><el-icon><Close /></el-icon></button>
+        <button class="attachment-remove" :disabled="busy || uploading || removing" :aria-label="`移除待发送附件 ${file.path}`" @click="emit('remove',file)"><el-icon><Close /></el-icon></button>
       </div>
     </div>
     <el-input class="chat-textarea" :model-value="modelValue" @update:model-value="emit('update:modelValue', $event)" type="textarea"
@@ -14,6 +14,7 @@
         <el-popover v-model:visible="uploadMenu" placement="top-start" :width="180" trigger="click">
           <template #reference><button class="add-file" aria-label="添加文件" :disabled="busy || uploading"><el-icon><Plus /></el-icon></button></template>
           <button class="upload-file-menu" :disabled="busy || uploading" @click="openPicker"><el-icon><Upload /></el-icon>{{ uploading ? '正在上传…' : '上传文件' }}</button>
+          <button class="upload-file-menu library-menu" @click="uploadMenu=false;emit('files')"><el-icon><FolderOpened /></el-icon>会话文件<span v-if="libraryFiles?.length">{{ libraryFiles.length }}</span></button>
         </el-popover>
         <input ref="fileInput" type="file" :accept="CHAT_FILE_ACCEPT" multiple hidden @change="chooseFiles" />
         <div class="composer-modes" role="group" aria-label="回答模式">
@@ -32,9 +33,8 @@
         <button class="tool-pill settings-tool" aria-label="模型设置" @click="emit('settings')"><el-icon><Setting /></el-icon></button>
       </div>
       <button v-if="busy && !uploading && !removing" class="composer-send stop" aria-label="停止生成" @click="emit('stop')"><span></span></button>
-      <button v-else class="composer-send btn-send" aria-label="发送消息" :disabled="!modelValue.trim() || uploading || removing" @pointerdown.prevent @click="emit('send')"><el-icon><Top /></el-icon></button>
+      <button v-else class="composer-send btn-send" aria-label="发送消息" :disabled="(!modelValue.trim() && !files?.length) || uploading || removing" @pointerdown.prevent @click="emit('send')"><el-icon><Top /></el-icon></button>
     </div>
-    <div v-if="coding" class="coding-attached"><el-icon><FolderOpened /></el-icon><a href="#" @click.prevent="emit('files')">{{ files?.length ? `${files.length} 个会话文件 · 查看 / 下载` : '可生成文件 · 查看会话文件' }}</a><button aria-label="停用文件工具" @click="emit('disableCoding')" :disabled="busy">×</button></div>
   </div>
 </template>
 
@@ -42,14 +42,14 @@
 import { ref } from 'vue';
 import { CHAT_FILE_ACCEPT, type ChatFile } from '@/utils/chat-files';
 import { clipboardFiles } from '@/utils/clipboard-files';
-const props = defineProps<{ modelValue: string; mode: string; busy: boolean; coding: boolean; files?: ChatFile[]; uploading?: boolean; removing?: boolean; knowledgeBaseId: number; knowledgeBases: any[] }>();
+const props = defineProps<{ modelValue: string; mode: string; busy: boolean; coding: boolean; files?: ChatFile[]; libraryFiles?:ChatFile[]; uploading?: boolean; removing?: boolean; knowledgeBaseId: number; knowledgeBases: any[] }>();
 const fileInput = ref<HTMLInputElement>();
 const uploadMenu=ref(false);
 const emit = defineEmits(['update:modelValue', 'update:mode', 'update:knowledgeBaseId', 'enter', 'send', 'stop', 'settings', 'coding', 'disableCoding', 'upload', 'files', 'remove']);
 function openPicker(){uploadMenu.value=false;fileInput.value?.click();}
 function chooseFiles(event:Event) { const input=event.target as HTMLInputElement; const files=Array.from(input.files||[]);input.value='';if(files.length)emit('upload',files); }
 function pasteFiles(event:ClipboardEvent) {
-  const files=clipboardFiles(event.clipboardData,props.files?.map(f=>f.path));
+  const files=clipboardFiles(event.clipboardData,props.libraryFiles?.map(f=>f.path));
   if(!files.length)return; // Leave ordinary text/code paste to the browser, including cursor/selection behavior.
   event.preventDefault();
   if(props.busy || props.uploading || props.removing)return;
@@ -84,10 +84,7 @@ button:focus-visible { outline: 2px solid #668bdf; outline-offset: 2px; }
 .composer-send { display: flex; align-items: center; justify-content: center; flex: 0 0 36px; width: 36px; height: 36px; border-radius: 50%; background: #2d4d77; color: white; font-size: 20px; }
 .composer-send:disabled { background: #e0e6ef; color: #77869b; opacity: 1; }
 .stop span { width: 11px; height: 11px; background: white; border-radius: 2px; }
-.coding-attached { display: flex; align-items: center; gap: 6px; margin: 11px 5px 0; padding-top: 9px; border-top: 1px solid #dce3ed; font-size: 12px; color: #596980; }
-.coding-attached button { margin-left: auto; font-size: 18px; }
-.coding-attached a { color: inherit; text-decoration: none; overflow-wrap: anywhere; }
-.coding-attached a:hover { color: #234f89; text-decoration: underline; }
+.library-menu { margin-top:6px;background:transparent; }.library-menu span { margin-left:auto;font-size:12px;color:#657287; }
 .composer-kb-label { font-size: 13px; color: #526177; margin-bottom: 10px; }
 @media(max-width: 900px) { .assistant-composer { border-radius: 21px; padding: 13px 12px 10px; } .composer-tools { gap: 2px; } .tool-pill { font-size: 12px; padding: 7px; } .composer-modes button { padding: 6px 8px; font-size: 12px; } .settings-tool { display: none; } .composer-send { align-self: flex-end; } .coding-attached { font-size: 12px; } }
 @media(max-width: 370px) { .composer-tools { max-width: 230px; } }

@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vue-tsc && vite build",
     "preview": "vite preview",
-    "test": "node --test test/sse.cjs test/chat-stream.cjs test/api-config.cjs test/registration-validation.cjs test/forum-links.cjs test/chat-navigation.cjs test/code-workspace.cjs test/local-code-files.cjs test/clipboard-files.cjs",
+    "test": "node --test test/sse.cjs test/chat-stream.cjs test/api-config.cjs test/registration-validation.cjs test/forum-links.cjs test/chat-navigation.cjs test/code-workspace.cjs test/local-code-files.cjs test/clipboard-files.cjs test/message-attachments.cjs",
     "lint": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs,.ts,.tsx,.cts,.mts --fix --ignore-path .gitignore",
     "format": "prettier --write src/"
   },

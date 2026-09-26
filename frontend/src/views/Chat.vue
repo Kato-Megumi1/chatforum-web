@@ -81,7 +81,7 @@
         <div class="assistant-start">
           <div class="assistant-suggestions"><button @click="suggest('帮我看看论坛最新的7条帖子', true)"><el-icon><ChatLineSquare /></el-icon>逛逛社区<span>↗</span></button><button @click="openCoding"><span class="code-symbol">&lt;/&gt;</span>一起写代码<span>↗</span></button><button @click="suggest('帮我梳理一下这个想法：', false)"><el-icon><EditPen /></el-icon>梳理一个想法<span>↗</span></button></div>
           <AssistantComposer v-model="inputText" v-model:mode="agentMode" v-model:knowledge-base-id="selectedKnowledgeBaseId"
-            :busy="chatStore.isStreaming || uploadingFiles || removingFiles" :coding="codingEnabled" :files="chatFiles" :uploading="uploadingFiles" :removing="removingFiles" :knowledge-bases="knowledgeBases" @upload="uploadFiles" @remove="removeFile" @files="showCode = true" @enter="handleKeyDown" @send="handleSendMessage" @stop="handleStopGeneration" @settings="showSettings = true" @coding="openCoding" @disable-coding="disableCoding" />
+            :busy="chatStore.isStreaming || uploadingFiles" :coding="codingEnabled" :files="pendingFiles" :library-files="chatFiles" :uploading="uploadingFiles" :knowledge-bases="knowledgeBases" @upload="uploadFiles" @remove="removePendingFile" @files="openFileLibrary" @enter="handleKeyDown" @send="handleSendMessage" @stop="handleStopGeneration" @settings="showSettings = true" @coding="openCoding" />
           <p class="assistant-footnote">{{ agentMode === 'agent' ? 'Agent 可调用已启用工具；编程修改由你确认。' : '普通模式专注对话；需要工具时可切换 Agent。' }}</p>
         </div>
       </div>
@@ -171,7 +171,8 @@
             </div>
             <div class="message-body">
               <div class="message-role">{{ msg.role === 'user' ? userDisplayName : messageIdentity(msg) }}</div>
-              <div class="message-bubble" :class="[msg.role, { 'thinking-bubble': msg.pending && !msg.content }]">
+              <MessageAttachments v-if="isAssistant && msg.role==='user' && msg.ragMetadata?.messageAttachments?.length" :conversation-id="msg.conversationId" :files="msg.ragMetadata.messageAttachments" />
+              <div v-if="msg.content || msg.role!=='user'" class="message-bubble" :class="[msg.role, { 'thinking-bubble': msg.pending && !msg.content }]">
                 <span v-if="msg.pending && !msg.content" class="typing-indicator" role="status" aria-label="正在思考"></span>
                 <template v-else>
                 <div v-if="hasToolResults(msg.content)" class="tool-results">
@@ -185,7 +186,7 @@
                   <el-divider />
                 </div>
                 <div class="message-text" v-html="renderMarkdown(getCleanContent(msg.content))"></div>
-                <RagEvidence :metadata="msg.ragMetadata" />
+                <RagEvidence v-if="msg.role === 'assistant'" :metadata="msg.ragMetadata" />
                 <FileArtifacts v-if="isAssistant" :conversation-id="chatStore.currentConversation!.id" :artifacts="msg.ragMetadata?.fileArtifacts" />
                 </template>
               </div>
@@ -214,7 +215,7 @@
         <div class="chat-input-area">
           <template v-if="isAssistant">
             <AssistantComposer v-model="inputText" v-model:mode="agentMode" v-model:knowledge-base-id="selectedKnowledgeBaseId"
-              :busy="chatStore.isStreaming || uploadingFiles || removingFiles" :coding="codingEnabled" :files="chatFiles" :uploading="uploadingFiles" :removing="removingFiles" :knowledge-bases="knowledgeBases" @upload="uploadFiles" @remove="removeFile" @files="showCode = true" @enter="handleKeyDown" @send="handleSendMessage" @stop="handleStopGeneration" @settings="showSettings = true" @coding="openCoding" @disable-coding="disableCoding" />
+              :busy="chatStore.isStreaming || uploadingFiles" :coding="codingEnabled" :files="pendingFiles" :library-files="chatFiles" :uploading="uploadingFiles" :knowledge-bases="knowledgeBases" @upload="uploadFiles" @remove="removePendingFile" @files="openFileLibrary" @enter="handleKeyDown" @send="handleSendMessage" @stop="handleStopGeneration" @settings="showSettings = true" @coding="openCoding" />
             <p class="assistant-footnote">内容由 AI 生成，重要信息请核实。</p>
           </template>
           <div v-else class="chat-input-wrapper">
@@ -252,7 +253,7 @@
         </div>
       </div>
     </main>
-    <CodeWorkspace v-if="isAssistant && chatStore.currentConversation" v-model="showCode" :conversation-id="chatStore.currentConversation.id" :refresh-key="chatStore.isStreaming || uploadingFiles || removingFiles" @changed="refreshFiles" />
+    <CodeWorkspace v-if="isAssistant && chatStore.currentConversation" v-model="showCode" :conversation-id="chatStore.currentConversation.id" :refresh-key="chatStore.isStreaming || uploadingFiles" @changed="refreshFiles" @attach="attachFiles" />
     <el-drawer v-model="showSettings" title="模型设置" size="min(420px, 100vw)" class="settings-drawer">
       <el-form label-position="top">
         <el-form-item label="对话模型（仅选择，不配置密钥）">
@@ -314,7 +315,8 @@ import RagEvidence from '@/components/RagEvidence.vue';
 import AssistantComposer from '@/components/AssistantComposer.vue';
 import CodeWorkspace from '@/components/CodeWorkspace.vue';
 import FileArtifacts from '@/components/FileArtifacts.vue';
-import { uploadChatFiles, deleteChatFile, type ChatFile } from '@/utils/chat-files';
+import MessageAttachments from '@/components/MessageAttachments.vue';
+import { uploadChatFiles, chatFileKey, type ChatFile } from '@/utils/chat-files';
 import { publicAsset, CONNECTION_SETTINGS_ENABLED } from '@/utils/api';
 import { useChatStore } from '@/stores/chat';
 import { useUserStore } from '@/stores/user';
@@ -328,8 +330,8 @@ const mobileSidebar = ref(false);
 const mobileOptions = ref(false);
 const openConnection = () => { window.dispatchEvent(new Event('chatforum:connection-settings')); mobileSidebar.value = false; };
 const userStore = useUserStore();
-const chatFiles = ref<ChatFile[]>([]), uploadingFiles = ref(false), removingFiles = ref(false);
-function disableCoding() { codingEnabled.value = false; }
+const chatFiles = ref<ChatFile[]>([]), uploadingFiles = ref(false);
+const pendingFiles=computed(()=>chatStore.currentConversation ? chatStore.draftAttachments[chatStore.currentConversation.id]||[] : []);
 const ownerId = userStore.user!.id;
 chatStore.initializeNavigation(ownerId);
 let viewActive = true, initializing = true, restoring = true;
@@ -489,11 +491,27 @@ async function createAssistant() {
 }
 let openingCode = false;
 async function openCoding() {
-  if (openingCode || uploadingFiles.value || removingFiles.value || chatStore.isStreaming || !isAssistant.value) return;
+  if (openingCode || uploadingFiles.value || chatStore.isStreaming || !isAssistant.value) return;
   openingCode = true;
   try { await ensureAssistantConversation(); agentMode.value = 'agent'; codingEnabled.value = true; showCode.value = true; }
   catch (e: any) { ElMessage.error(e.message || '工作区打开失败'); }
   finally { openingCode = false; }
+}
+async function openFileLibrary() {
+  if(openingCode || uploadingFiles.value || !isAssistant.value)return;
+  openingCode=true;
+  try{await ensureAssistantConversation();if(ownsView()&&isAssistant.value)showCode.value=true;}
+  catch(e:any){ElMessage.error(e.message||'文件列表打开失败');}finally{openingCode=false;}
+}
+function attachFiles(files:ChatFile[]) {
+  const cid=chatStore.currentConversation?.id;
+  if(!cid||!ownsView()||!isAssistant.value)return;
+  chatStore.draftAttachments[cid]=[...new Map([...pendingFiles.value,...files].map(f=>[chatFileKey(f),f])).values()];
+  codingEnabled.value=true;
+}
+function removePendingFile(file:ChatFile) {
+  const cid=chatStore.currentConversation?.id;if(!cid||chatStore.isStreaming)return;
+  chatStore.draftAttachments[cid]=pendingFiles.value.filter(f=>chatFileKey(f)!==chatFileKey(file));
 }
 let fileEpoch = 0;
 async function refreshFiles() {
@@ -501,34 +519,25 @@ async function refreshFiles() {
   chatFiles.value = [];
   if (!cid || !isAssistant.value || !ownsView()) return;
   try { const value = await request.get<{files:ChatFile[]}>('/coding/'+cid);
-    if (epoch === fileEpoch && ownsView() && cid === chatStore.currentConversation?.id && isAssistant.value) chatFiles.value = value.files || [];
+    if (epoch === fileEpoch && ownsView() && cid === chatStore.currentConversation?.id && isAssistant.value) {
+      chatFiles.value = value.files || [];
+      chatStore.draftAttachments[cid]=pendingFiles.value.filter(f=>chatFiles.value.some(saved=>chatFileKey(saved)===chatFileKey(f)));
+    }
   } catch { /* The drawer provides a visible retry; never reuse another conversation's files. */ }
 }
 async function uploadFiles(files:File[]) {
-  if (uploadingFiles.value || removingFiles.value || chatStore.isStreaming || !isAssistant.value) return;
+  if (uploadingFiles.value || chatStore.isStreaming || !isAssistant.value) return;
   uploadingFiles.value = true;
   try {
     await ensureAssistantConversation();
     const cid = chatStore.currentConversation!.id;
     if (!ownsView() || cid !== chatStore.currentConversation?.id || !isAssistant.value) return;
-    await uploadChatFiles(cid, files);
+    await uploadChatFiles(cid, files, saved=>{if(ownsView()&&cid===chatStore.currentConversation?.id)attachFiles(saved);});
     if (!ownsView() || cid !== chatStore.currentConversation?.id) return;
     codingEnabled.value = true;
     await refreshFiles(); ElMessage.success('已上传');
   } catch(e:any) { ElMessage.error(e.message || '上传失败，请检查文件格式'); }
   finally { uploadingFiles.value = false; await refreshFiles(); }
-}
-async function removeFile(file:ChatFile) {
-  const cid=chatStore.currentConversation?.id;
-  if(!cid || !ownsView() || !isAssistant.value || uploadingFiles.value || removingFiles.value || chatStore.isStreaming)return;
-  removingFiles.value=true;
-  try {
-    await ElMessageBox.confirm(`删除“${file.path}”及其同名修改版？本机原件和已发送的消息不受影响。`, '删除附件', {confirmButtonText:'删除',cancelButtonText:'取消',type:'warning'});
-    if(!ownsView() || cid!==chatStore.currentConversation?.id || !isAssistant.value)return;
-    await deleteChatFile(cid,file);
-    if(ownsView() && cid===chatStore.currentConversation?.id){await refreshFiles();ElMessage.success('附件已删除');}
-  } catch(e:any) { if(e!=='cancel' && e!=='close' && ownsView())ElMessage.error(e.message || '删除失败，请重试'); }
-  finally { removingFiles.value=false; }
 }
 watch(() => [chatStore.currentConversation?.id, chatStore.isStreaming, userStore.user?.id], () => { if (!chatStore.isStreaming) void refreshFiles(); }, {immediate:true});
 function suggest(text: string, useAgent: boolean) { inputText.value = text; agentMode.value = useAgent ? 'agent' : 'normal'; }
@@ -704,9 +713,9 @@ const handleNewChat = async () => {
 
 let sendingLock = false;
 const handleSendMessage = async () => {
-  if (sendingLock || uploadingFiles.value || removingFiles.value || chatStore.isStreaming || isLegacy.value) return;
+  if (sendingLock || uploadingFiles.value || chatStore.isStreaming || isLegacy.value) return;
   const text = inputText.value.trim();
-  if (!text) return;
+  if (!text && !pendingFiles.value.length) return;
   if (!selectedModel.value?.available) { ElMessage.warning('请选择可用的服务端模型'); return; }
   if (selectedKnowledgeBaseId.value && (knowledgeError.value || selectedKnowledgeIssue.value)) {
     ElMessage.warning(knowledgeError.value || selectedKnowledgeIssue.value); return;
@@ -717,6 +726,13 @@ const handleSendMessage = async () => {
   catch (e: any) { sendingLock = false; ElMessage.error(e.message || '创建会话失败'); return; }
   inputText.value = '';
   const sendingConversationId = chatStore.currentConversation?.id;
+  const sendingFiles=isAssistant.value?[...pendingFiles.value]:[];
+  const restoreDraft=()=>{
+    if(!ownsView()||!sendingConversationId)return;
+    chatStore.drafts[sendingConversationId]=text;
+    chatStore.draftAttachments[sendingConversationId]=sendingFiles;
+    if(sendingConversationId===chatStore.currentConversation?.id)inputText.value=text;
+  };
   try {
     const persona = hasPersonaActive.value ? selectedPersona.value : undefined;
     const systemPrompt = selectedPersona.value === 'custom' ?
@@ -727,12 +743,14 @@ const handleSendMessage = async () => {
     if (chatStore.currentConversation?.id !== sendingConversationId) throw new Error('会话已切换，请在原会话重新发送');
     const skills = [
       ...(agentMode.value === 'agent' ? enabledSkills.value.filter(s => s !== 'code_workspace') : []),
-      ...(isAssistant.value && codingEnabled.value ? ['code_workspace'] : []),
+      ...(isAssistant.value && (codingEnabled.value || sendingFiles.length) ? ['code_workspace'] : []),
     ];
     const kbId = selectedKnowledgeBaseId.value > 0 ? selectedKnowledgeBaseId.value : undefined;
-    await chatStore.sendConfigured(text, agentMode.value === 'agent' ? 'agent' : 'normal', skills, persona, systemPrompt, kbId);
+    const completed=await chatStore.sendConfigured(text, agentMode.value === 'agent' ? 'agent' : 'normal', skills, persona, systemPrompt, kbId,undefined,undefined,
+      {files:sendingFiles,onAccepted:()=>{if(ownsView()&&sendingConversationId)chatStore.draftAttachments[sendingConversationId]=[];}});
+    if(!completed)restoreDraft();
   } catch (e: any) {
-    inputText.value = text;
+    restoreDraft();
     ElMessage.error(e.message || '发送失败');
   } finally {
     sendingLock = false;

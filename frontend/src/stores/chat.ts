@@ -4,6 +4,7 @@ import request from '@/utils/request';
 import { watchChatRun } from '@/utils/chat-stream';
 import { disconnectLocalWorkspace } from '@/utils/local-workspace';
 import { CHAT_NAVIGATION_KEY, emptyChatNavigation, readChatNavigation, type ChatSpace } from '@/utils/chat-navigation';
+import { chatFileRef, type ChatFile } from '@/utils/chat-files';
 
 interface Conversation { id: number; title: string; isPinned: boolean; userId: number; createdAt: string; updatedAt: string;
   conversationType: 'ASSISTANT' | 'ROLEPLAY' | 'LEGACY'; personaKey?: string; personaLabel?: string;
@@ -38,6 +39,7 @@ export const useChatStore = defineStore('chat', () => {
   let identityEpoch = 0;
   const navigation = ref(emptyChatNavigation(0));
   const drafts = ref<Record<number, string>>({}); // In-memory only; never persist message/draft contents in navigation storage.
+  const draftAttachments = ref<Record<number,ChatFile[]>>({}); // Per-conversation pending selection, never the whole library.
   const isLoadingConversation = ref(false);
   const persistNavigation = () => {
     if (!navigation.value.userId) return;
@@ -124,6 +126,7 @@ export const useChatStore = defineStore('chat', () => {
     conversations.value = conversations.value.filter(c => c.id !== id);
     delete conversationSettings.value[id];
     delete navigation.value.scroll[id]; delete drafts.value[id];
+    delete draftAttachments.value[id];
     if (currentConversation.value?.id === id) clearSelection(); else persistNavigation();
   };
   const deleteMessage = async (id: number) => {
@@ -133,8 +136,10 @@ export const useChatStore = defineStore('chat', () => {
   };
 
   const send = async (question: string, mode: 'normal' | 'agent', enabledSkills?: string[],
-    persona?: string, customSystemPrompt?: string, knowledgeBaseId?: number, onStream?: (text: string) => void, codingWorkspaceId?: string) => {
-    if (isStreaming.value || !question.trim()) return;
+    persona?: string, customSystemPrompt?: string, knowledgeBaseId?: number, onStream?: (text: string) => void, codingWorkspaceId?: string,
+    attachments?:{files:ChatFile[];onAccepted?:()=>void}) => {
+    if (isStreaming.value || (!question.trim()&&!attachments?.files.length)) return false;
+    let completed=false;
     isStreaming.value = true;
     const controller = new AbortController();
     abortController.value = controller;
@@ -144,22 +149,26 @@ export const useChatStore = defineStore('chat', () => {
         conversationType: persona ? 'ROLEPLAY' : 'ASSISTANT', persona, customPersonaPrompt: customSystemPrompt }));
       cid = currentConversation.value!.id;
       pendingQuestion.value = { id: -Date.now(), role: 'user', content: question,
-        conversationId: cid, createdAt: new Date().toISOString() };
+        conversationId: cid, createdAt: new Date().toISOString(),
+        ...(attachments?.files.length?{ragMetadata:{messageAttachments:attachments.files}}:{}) };
       pendingReply.value = { id: -Date.now() - 1, role: 'assistant', content: '', pending: true,
         conversationId: cid, createdAt: new Date().toISOString() };
       messages.value.push(pendingQuestion.value, pendingReply.value);
       // Admit once; subscribe/reconnect to the durable run without repeating model calls.
       const run = await request.post<Run>('/chat/runs', { requestId: crypto.randomUUID(),
         conversationId: cid, question, mode, enabledSkills, codingWorkspaceId, persona: persona || undefined,
+        attachments:attachments?.files.length?attachments.files.map(chatFileRef):undefined,
         customSystemPrompt: customSystemPrompt || undefined, knowledgeBaseId: knowledgeBaseId || undefined,
         modelId: getConversationSettings(cid).modelId || preferredModelId.value || llmConfig.value.defaultModelId });
       activeRun = run.id;
-      if (controller.signal.aborted) { await request.delete('/chat/runs/' + run.id); return; }
+      attachments?.onAccepted?.();
+      if (controller.signal.aborted) { await request.delete('/chat/runs/' + run.id); return false; }
       const reply = pendingReply.value;
       const status = await watchChatRun(run.id, controller.signal, text => {
         reply.content += text; onStream?.(text);
       });
       if (status.status === 'COMPLETED') {
+        completed=true;
         reply.content = status.result?.content || reply.content;
         reply.ragMetadata = status.result?.ragMetadata;
       } else if (status.status !== 'CANCELLED') throw new Error(status.error || '生成失败');
@@ -176,12 +185,13 @@ export const useChatStore = defineStore('chat', () => {
       isStreaming.value = false;
       void loadConversations().catch(() => undefined);
     }
+    return completed;
   };
   const sendMessage = (question: string, onStream?: (text: string) => void) =>
     send(question, 'normal', [], undefined, undefined, undefined, onStream);
   const resetForUser = () => {
     disconnectLocalWorkspace(false); // Credentials are changing; expired browser leases fail closed.
-    identityEpoch++; navigation.value = emptyChatNavigation(0); drafts.value = {}; isLoadingConversation.value = false;
+    identityEpoch++; navigation.value = emptyChatNavigation(0); drafts.value = {}; draftAttachments.value={}; isLoadingConversation.value = false;
     try { sessionStorage.removeItem(CHAT_NAVIGATION_KEY); } catch { /* Storage may be blocked. */ }
     selection++; abortController.value?.abort(); activeRun = null;
     pendingReply.value = null; pendingQuestion.value = null;
@@ -194,7 +204,7 @@ export const useChatStore = defineStore('chat', () => {
     send(question, 'agent', enabledSkills, persona, customSystemPrompt, knowledgeBaseId, onStream);
 
   return { conversations, currentConversation, messages, llmConfig, preferredModelId, isStreaming, conversationSettings,
-    navigation, drafts, isLoadingConversation, initializeNavigation, setSpace, saveView,
+    navigation, drafts, draftAttachments, isLoadingConversation, initializeNavigation, setSpace, saveView,
     getConversationSettings, saveConversationSettings, loadConversations, loadDefaultConfig,
     createConversation, configureIdentity, clearSelection, updateConversation, deleteConversation, deleteMessage, selectConversation,
     sendMessage, sendMessageAgent, sendConfigured: send, stopGeneration, abortController, resetForUser };

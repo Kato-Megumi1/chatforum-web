@@ -19,7 +19,7 @@
       <el-tab-pane :label="`文件 · ${workspace.files.length}`" name="files">
         <div v-if="!workspace.files.length" class="workspace-empty"><el-icon :size="32"><FolderOpened /></el-icon><h3>把这次需要的文件放进来</h3><p>上传图片、PDF、Word或代码，再回到对话提问或修改。</p><small>文档/图片单个20MB、共100MB；文本/代码单个64KB、共1MB</small></div>
         <div v-else class="workspace-files"><nav aria-label="代码文件"><button v-for="file in workspace.files" :key="file.path" :class="{selected:selectedPath===file.path}" @click="readFile(file.path)"><el-icon><Document /></el-icon><span>{{ file.path }}</span><small>v{{ file.revision }}</small></button></nav>
-          <div class="file-view"><header>{{ selectedPath || '选择文件查看' }} <template v-if="selectedPath"><el-button link type="primary" :disabled="busy" @click="downloadSelected">下载此文件</el-button><el-button link type="danger" :disabled="busy || refreshKey" @click="removeSelected">删除此文件</el-button></template></header><pre>{{ selectedContent }}</pre></div></div>
+          <div class="file-view"><header>{{ selectedPath || '选择文件查看' }} <template v-if="selectedPath"><el-button link type="primary" :disabled="busy || refreshKey" @click="attachSelected">添加到消息</el-button><el-button link type="primary" :disabled="busy" @click="downloadSelected">下载此文件</el-button><el-button link type="danger" :disabled="busy || refreshKey" @click="removeSelected">删除此文件</el-button></template></header><pre>{{ selectedContent }}</pre></div></div>
       </el-tab-pane>
       <el-tab-pane :label="`变更审查${pending ? ' · '+pending+' 待确认' : ''}`" name="changes">
         <div v-if="!workspace.changes.length" class="workspace-empty"><h3>还没有修改建议</h3><p>回到对话告诉编程 Agent 要修复或实现什么，建议会显示在这里。</p></div>
@@ -40,7 +40,7 @@ import request from '@/utils/request';
 import { codeArchive, codeDiff } from '@/utils/code-workspace';
 import { CHAT_FILE_ACCEPT, uploadChatFiles, downloadChatFile, deleteChatFile } from '@/utils/chat-files';
 const props = defineProps<{ modelValue: boolean; conversationId: number; refreshKey: boolean }>();
-const emit = defineEmits(['update:modelValue', 'changed']);
+const emit = defineEmits(['update:modelValue', 'changed', 'attach']);
 const workspace = ref<{ files:any[];changes:any[] }>({ files:[], changes:[] });
 const busy=ref(false),error=ref(''),tab=ref('files'),uploadInput=ref<HTMLInputElement>();
 const selectedPath=ref(''),selectedContent=ref(''),selectedChange=ref<any>(null),showCreate=ref(false),newPath=ref(''),newContent=ref('');
@@ -64,8 +64,9 @@ async function importCode(files:Array<{path:string;content:string}>) {
 async function upload(event:Event) {
   const input=event.target as HTMLInputElement,files=Array.from(input.files||[]),cid=props.conversationId;input.value='';
   if(!files.length)return;
-  await run(async(base,current)=>{try{await uploadChatFiles(cid,files);}finally{const data=await request.get(base);if(current()){workspace.value=data;emit('changed');}}});
+  await run(async(base,current)=>{try{await uploadChatFiles(cid,files,saved=>{if(current())emit('attach',saved);});}finally{const data=await request.get(base);if(current()){workspace.value=data;emit('changed');}}});
 }
+function attachSelected(){const file=workspace.value.files.find(f=>f.path===selectedPath.value);if(file&&!props.refreshKey){emit('attach',[file]);emit('update:modelValue',false);}}
 const create=()=>importCode([{path:newPath.value.trim(),content:newContent.value}]);
 async function readFile(path:string) {
   const file=workspace.value.files.find(f=>f.path===path);
