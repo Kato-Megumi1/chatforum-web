@@ -112,6 +112,7 @@ const request = {
   get<T = any>(url: string, config?: any): Promise<T> { return http.get(url, config) as any; },
   post<T = any>(url: string, data?: any, config?: any): Promise<T> { return http.post(url, data, config) as any; },
   put<T = any>(url: string, data?: any, config?: any): Promise<T> { return http.put(url, data, config) as any; },
+  patch<T = any>(url: string, data?: any, config?: any): Promise<T> { return http.patch(url, data, config) as any; },
   delete<T = any>(url: string, config?: any): Promise<T> { return http.delete(url, config) as any; },
 };
 

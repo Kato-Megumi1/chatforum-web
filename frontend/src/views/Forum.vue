@@ -70,19 +70,26 @@
             <el-radio-button value="popular">热门</el-radio-button>
             <el-radio-button value="likes">最多点赞</el-radio-button>
           </el-radio-group>
+          <el-select v-if="sortBy === 'popular'" v-model="hotBasis" class="hot-period" aria-label="热榜口径" @change="changeHotBasis">
+            <el-option label="近期互动" value="interaction" /><el-option label="发布衰减" value="published" />
+          </el-select>
           <el-select v-if="sortBy === 'popular'" v-model="hotPeriod" class="hot-period" aria-label="热门范围" @change="applyFilters">
-            <el-option label="今日热门" value="today" /><el-option label="本周热门" value="week" /><el-option label="全部热门" value="all" />
+            <el-option :label="hotBasis === 'interaction' ? '24 小时互动' : '24 小时发布'" value="today" /><el-option :label="hotBasis === 'interaction' ? '7 日互动' : '7 日发布'" value="week" /><el-option v-if="hotBasis === 'published'" label="全部发布" value="all" />
           </el-select>
         </div>
         <div v-if="searchText || categoryId || tagId" class="filter-summary"><span>已筛选{{ searchText ? ' · ' + searchText : '' }}</span><el-button link @click="clearFilters">清除筛选</el-button></div>
-        <div v-if="sortBy === 'popular' && updatedAt" class="feed-note hot-updated">更新于 {{ formatUpdatedAt(updatedAt) }}<el-button link @click="refreshFirst">刷新热榜</el-button></div>
+        <div v-if="sortBy === 'popular'" class="feed-note hot-updated"><span v-if="updatedAt">更新于 {{ formatUpdatedAt(updatedAt) }}</span><el-button link @click="refreshFirst">刷新热榜</el-button></div>
         <div v-if="sortBy !== 'popular'" class="feed-note feed-refresh"><span v-if="updatedAt">列表时间 {{ formatUpdatedAt(updatedAt) }}</span><el-button link @click="refreshFirst">{{ sortBy === 'likes' ? '刷新排序' : '刷新帖子' }}</el-button></div>
         <p v-if="coverageNote" class="feed-note">{{ coverageNote }}</p>
+        <p v-if="windowCountsNote" class="feed-note">{{ windowCountsNote }}</p>
+        <el-alert v-if="hotStatusNote" :title="hotStatusNote" :type="hotStatus === 'stale' ? 'warning' : 'info'" :closable="false" />
+        <el-alert v-if="searchNote" :title="searchNote" type="warning" :closable="false" />
+        <div v-if="userStore.user && sortBy !== 'likes'" class="feed-tracking"><el-button :loading="tracking" :disabled="!canTrack || trackedScopes.has(trackingKey)" @click="trackCurrent">{{ trackedScopes.has(trackingKey) ? '已开启追踪' : sortBy === 'popular' ? '追踪热榜变化' : '追踪新帖' }}</el-button><span>{{ trackingHint }}</span><router-link to="/notifications">管理追踪</router-link></div>
         <el-alert v-if="navigationNotice" :title="navigationNotice" type="info" :closable="false" />
         <el-alert v-if="cursorExpired" title="这份列表快照已失效，请刷新首屏查看最新结果。" type="warning" :closable="false"><el-button link @click="refreshFirst">刷新首屏</el-button></el-alert>
         <el-alert v-if="loadError" title="暂时没能加载帖子，请重试" type="error" :closable="false"><el-button link @click="loadPosts">重新加载</el-button></el-alert>
         <div class="post-list" v-loading="loading">
-          <div v-if="posts.length === 0 && !loading && !loadError && !cursorExpired" class="empty-posts">
+          <div v-if="posts.length === 0 && !loading && !loadError && !cursorExpired && !hotBlocked" class="empty-posts">
             <el-icon :size="48" color="#C9CDD4"><Document /></el-icon>
             <p>{{ hasMore ? '本页帖子已不可访问，可继续查看下一页' : '暂无帖子' }}</p>
           </div>
@@ -134,11 +141,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
+import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import { useRouter, useRoute, onBeforeRouteLeave } from 'vue-router';
 import { forumFilters, forumQuery, forumFilterKey, readForumNavigation, saveForumNavigation } from '@/utils/forum-experience';
 import request from '@/utils/request';
 import { useUserStore } from '@/stores/user';
+import { ElMessage } from 'element-plus';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import 'dayjs/locale/zh-cn';
@@ -162,6 +170,17 @@ const page = ref(1);
 const pageSize = ref(20);
 const cursor = ref(''), nextCursor = ref(''), hasMore = ref(false), updatedAt = ref(''), coverageNote = ref('');
 const navigationNotice = ref(''), cursorExpired = ref(false);
+const hotBasis = ref('interaction'), hotStatus = ref(''), searchNote = ref(''), windowCountsNote = ref('');
+const tracking = ref(false), trackedScopes = reactive(new Set<string>());
+let trackingRequest = 0;
+const hotBlocked = computed(() => sortBy.value === 'popular' && ['not_ready', 'disabled', 'unsupported_scope'].includes(hotStatus.value));
+const hotStatusNote = computed(() => ({ not_ready: '互动热榜正在构建，暂未就绪，请稍后刷新；不会猜测启用前的历史互动。',
+  disabled: '当前热榜未启用，暂时没有可用快照；可切换排行口径。', unsupported_scope: '当前热榜暂不支持此筛选范围，请调整筛选或切换发布衰减榜。',
+  stale: '榜单更新延迟，当前显示上次已完成的快照，请留意更新时间。' }[hotStatus.value] || ''));
+const canTrack = computed(() => !tagId.value && Array.from(searchText.value.trim()).length !== 1 && searchText.value.trim().length <= 160
+  && !(sortBy.value === 'popular' && (hotPeriod.value === 'all' || hotBlocked.value)));
+const trackingKey = computed(() => JSON.stringify([sortBy.value, categoryId.value, searchText.value.trim(), hotPeriod.value, hotBasis.value]));
+const trackingHint = computed(() => tagId.value ? '标签筛选暂不支持追踪，可改用分类或关键词。' : !canTrack.value ? '追踪需有效的热榜窗口，关键词为空或 2～160 字符。' : '持续检查更新，默认每小时合并站内提醒；可在消息通知中暂停。');
 const loading = ref(false);
 const loadError = ref(false), hotPeriod = ref('week'), tagsExpanded = ref(false), container = ref<HTMLElement | null>(null);
 let requestId = 0, restorePosition = false, initialLoad = true;
@@ -174,6 +193,25 @@ function savePosition() {
     { filterKey: historyKey, cursors: cursorHistory });
 }
 function filters() { return { categoryId: categoryId.value, tagId: tagId.value, search: searchText.value, sortBy: sortBy.value, hotPeriod: hotPeriod.value, page: page.value, limit: pageSize.value, cursor: cursor.value }; }
+function routeQuery() { return { ...forumQuery(filters()), ...(sortBy.value === 'popular' ? { hotBasis: hotBasis.value } : {}) }; }
+function scopedFilterKey(value = filters()) { return forumFilterKey(value) + (value.sortBy === 'popular' ? ':' + hotBasis.value : ''); }
+function changeHotBasis() { if (hotBasis.value === 'interaction' && hotPeriod.value === 'all') hotPeriod.value = 'week'; applyFilters(); }
+async function trackCurrent() {
+  if (!canTrack.value || tracking.value || !userStore.user) return;
+  const account = userStore.user.id, key = trackingKey.value, stamp = ++trackingRequest;
+  const body: any = { kind: sortBy.value === 'popular' ? 'HOT_RISE' : 'NEW_POSTS', cooldownSeconds: 3600 };
+  if (categoryId.value) body.categoryId = Number(categoryId.value);
+  if (searchText.value.trim()) body.query = searchText.value.trim();
+  if (sortBy.value === 'popular') { body.hours = hotPeriod.value === 'today' ? 24 : 168; body.rankingBasis = hotBasis.value; }
+  tracking.value = true;
+  try {
+    const created = await request.post('/forum/subscriptions', body);
+    if (stamp !== trackingRequest || account !== userStore.user?.id || key !== trackingKey.value) return;
+    if (created?.enabled !== true) { ElMessage.warning('追踪尚未启用，请到消息通知确认状态'); return; }
+    trackedScopes.add(key); ElMessage.success('已开启追踪，可在消息通知中管理');
+  } catch { /* the shared handler reports errors; do not claim that a watch was saved */ }
+  finally { if (stamp === trackingRequest) tracking.value = false; }
+}
 function applyFilters() { page.value = 1; cursor.value = ''; cursorHistory = {}; navigationNotice.value = ''; void navigate(); }
 function setCategory(id: string) { categoryId.value = id; applyFilters(); }
 function clearFilters() { categoryId.value = ''; tagId.value = ''; searchText.value = ''; applyFilters(); }
@@ -194,7 +232,7 @@ function nextPage() {
 }
 async function navigate() {
   restorePosition = false;
-  const target = { path: '/forum', query: forumQuery(filters()) };
+  const target = { path: '/forum', query: routeQuery() };
   if (router.resolve(target).fullPath === route.fullPath) { await loadPosts(); container.value?.scrollTo({ top: 0 }); }
   else await router.push(target);
 }
@@ -207,12 +245,12 @@ const loadPosts = async () => {
     const params: any = {
       limit: pageSize.value,
     };
-    if (sortBy.value === 'popular') params.hotPeriod = hotPeriod.value;
+    if (sortBy.value === 'popular') { params.hotPeriod = hotPeriod.value; params.hotBasis = hotBasis.value; }
     if (categoryId.value) params.categoryId = categoryId.value;
     if (tagId.value) params.tagId = tagId.value;
     if (searchText.value) params.search = searchText.value;
 
-    const key = forumFilterKey(filters());
+    const key = scopedFilterKey();
     historyKey = key;
     const isLikes = sortBy.value === 'likes';
     if (isLikes) {
@@ -224,6 +262,10 @@ const loadPosts = async () => {
     const data = await request.get(isLikes ? '/forum/posts' : '/forum/feed', { params });
     if (stamp !== requestId || account !== userStore.user?.id) return;
     posts.value = data.data;
+    searchNote.value = data.degraded ? '搜索服务暂不可用，当前使用数据库关键词查询，匹配方式可能与全文搜索不同。' : '';
+    hotStatus.value = data.snapshot?.status || '';
+    windowCountsNote.value = data.snapshot?.windowCountsBasis === 'signed_net_deltas_since_activation'
+      ? '按窗口内已记录的互动净变化排名，取消点赞或删除评论可使净值减少；不补猜功能启用前的数据。卡片计数仍为快照时点累计数。' : '';
     cursorExpired.value = false;
     if (isLikes) {
       if (typeof data.total === 'number') { likesTotal = data.total; likesCountKey = key; }
@@ -279,23 +321,28 @@ watch(() => route.fullPath, async () => {
   if (route.path !== '/forum') return;
   const f = forumFilters(route.query); categoryId.value = f.categoryId; tagId.value = f.tagId; searchText.value = f.search;
   sortBy.value = f.sortBy; hotPeriod.value = f.hotPeriod; page.value = f.page; pageSize.value = f.limit; cursor.value = f.cursor;
+  hotBasis.value = route.query.hotBasis === 'published' || (f.hotPeriod === 'all' && route.query.hotBasis !== 'interaction') ? 'published' : 'interaction';
+  if (sortBy.value === 'popular' && hotPeriod.value === 'all' && hotBasis.value === 'interaction') {
+    hotBasis.value = 'published'; navigationNotice.value = '全部历史使用发布衰减榜；互动榜仅提供 24 小时或 7 日窗口。';
+  }
   restorePosition = initialLoad && savedNavigation?.path === route.fullPath;
-  const key = forumFilterKey(f);
+  const key = scopedFilterKey(f);
   if (key !== historyKey) { cursorHistory = restorePosition && savedNavigation?.feed?.filterKey === key ? { ...savedNavigation.feed.cursors } : {}; historyKey = key; }
   if (restorePosition && !cursor.value) cursor.value = cursorHistory[String(page.value)] || '';
   initialLoad = false;
   if ((sortBy.value !== 'likes' && page.value > 1 && !cursor.value) || (sortBy.value === 'likes' && page.value > 100)) {
     navigationNotice.value = sortBy.value === 'likes' ? '旧链接超过点赞排序的 100 页范围，已返回首屏。' : '旧页码链接没有可恢复的游标，已返回首屏。';
     page.value = 1; cursor.value = ''; cursorHistory = {}; restorePosition = false;
-    await router.replace({ path: '/forum', query: forumQuery(filters()) });
+    await router.replace({ path: '/forum', query: routeQuery() });
     return;
   }
-  cursorExpired.value = false; hasMore.value = false; posts.value = []; coverageNote.value = ''; updatedAt.value = '';
+  cursorExpired.value = false; hasMore.value = false; posts.value = []; coverageNote.value = ''; updatedAt.value = ''; hotStatus.value = ''; searchNote.value = ''; windowCountsNote.value = '';
   void loadPosts();
 }, { immediate: true });
 watch(() => userStore.user?.id, () => {
   requestId++; posts.value = []; cursorHistory = {}; likesCountKey = ''; likesTotal = null;
   savedNavigation = null; initialLoad = false; historyKey = ''; refreshFirst();
+  trackingRequest++; tracking.value = false; trackedScopes.clear();
 });
 onBeforeRouteLeave(() => { savePosition(); requestId++; });
 onMounted(() => {
@@ -307,6 +354,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   requestId++;
+  trackingRequest++;
   if (tagTimer) clearInterval(tagTimer);
 });
 </script>
@@ -584,6 +632,8 @@ onUnmounted(() => {
 .feed-note { margin: 10px 0; font-size: 12px; line-height: 1.7; color: var(--text-secondary); overflow-wrap: anywhere; }
 .hot-updated { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .feed-refresh { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.feed-tracking { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 12px 0; font-size: 12px; color: var(--text-secondary); }
+.feed-tracking a { color: var(--primary-color); }
 
 @media (max-width: 900px) {
   .content-toolbar { position: sticky; top: 0; z-index: 3; background: #faf9f7; padding: 10px 0; }

@@ -17,6 +17,7 @@
       <div class="post-actions">
         <el-button round :type="post.isLiked ? 'primary' : 'default'" :loading="busy.has('like')" @click="togglePost('like')">{{ post.isLiked ? '已点赞' : '点赞' }} {{ post.likeCount }}</el-button>
         <el-button round :type="post.isFavorited ? 'primary' : 'default'" :loading="busy.has('favorite')" @click="togglePost('favorite')">{{ post.isFavorited ? '已收藏' : '收藏' }}</el-button>
+        <el-button v-if="userStore.user" round :loading="tracking" :disabled="trackedPost === post.id" @click="trackPost">{{ trackedPost === post.id ? '已关注更新' : '关注更新' }}</el-button>
         <el-button v-if="post.user.id === userStore.user?.id" round @click="$router.push('/forum/post/' + post.id + '/edit')">编辑帖子</el-button>
       </div>
       <section class="discussion">
@@ -87,6 +88,8 @@ const replyTo = ref<number | null>(null), submitting = ref(false), replySubmitti
 const expanded = reactive<Record<number, number>>({}), busy = reactive(new Set<string>());
 const highlightedId = ref<number | null>(null), container = ref<HTMLElement | null>(null);
 const focusUnavailable = ref(false);
+const tracking = ref(false), trackedPost = ref<number | null>(null);
+let trackingRequest = 0;
 const legacyContent = computed(() => {
   const safe = DOMPurify.sanitize(marked.parse(post.value?.content || '', { async: false }) as string,
     { FORBID_TAGS: ['style', 'iframe', 'form', 'input'], FORBID_ATTR: ['style', 'data-forum-post-path'] });
@@ -111,6 +114,18 @@ function goBack() {
 async function focusComment(id: number) { highlightedId.value = id; await nextTick(); document.getElementById('comment-' + id)?.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
 const formatTime = (time: string) => dayjs(time).fromNow();
 const loggedIn = () => { if (userStore.user) return true; ElMessage.warning('请先登录'); return false; };
+async function trackPost() {
+  if (!loggedIn() || !post.value || tracking.value) return;
+  const target = post.value.id, account = userStore.user!.id, stamp = generation, requestStamp = ++trackingRequest;
+  tracking.value = true;
+  try {
+    const created = await request.post('/forum/subscriptions', { kind: 'POST_ACTIVITY', postId: target, cooldownSeconds: 3600 });
+    if (stamp !== generation || requestStamp !== trackingRequest || target !== post.value?.id || account !== userStore.user?.id) return;
+    if (created?.enabled !== true) { ElMessage.warning('追踪尚未启用，请到消息通知确认状态'); return; }
+    trackedPost.value = target; ElMessage.success('已关注帖子更新，可在消息通知中管理');
+  } catch { /* do not convert failed or stale requests into a successful follow */ }
+  finally { if (requestStamp === trackingRequest) tracking.value = false; }
+}
 async function loadComments() {
   const stamp = ++commentRequest, id = route.params.id;
   commentsLoading.value = true;
@@ -147,7 +162,7 @@ async function load() {
       const stored = sessionStorage.getItem('forum-viewer-token');
       const viewed: any = await request.post('/forum/posts/' + target + '/view', stored ? { viewerToken: stored } : {});
       if (viewed.viewerToken) sessionStorage.setItem('forum-viewer-token', viewed.viewerToken);
-      if (stamp === generation) post.value.viewCount = viewed.viewCount;
+      if (stamp === generation && typeof viewed.viewCount === 'number') post.value.viewCount = viewed.viewCount;
     } catch { /* view measurement failure must not block reading */ }
   }
 }
@@ -224,11 +239,16 @@ async function removeComment(comment: any) {
 }
 watch(() => [route.params.id, route.query.comment], () => {
   generation++; commentRequest++; focusPending = true; page.value = 1; commentText.value = ''; replyText.value = ''; replyTo.value = null;
+  trackingRequest++; tracking.value = false; trackedPost.value = null;
   focusUnavailable.value = false; highlightedId.value = null;
   Object.keys(expanded).forEach(key => delete expanded[Number(key)]); void load();
   threadRevisions.clear();
 }, { immediate: true });
-onUnmounted(() => { generation++; commentRequest++; });
+watch(() => userStore.user?.id, () => {
+  generation++; commentRequest++; trackingRequest++; tracking.value = false; trackedPost.value = null;
+  commentText.value = ''; replyText.value = ''; replyTo.value = null; void load();
+});
+onUnmounted(() => { generation++; commentRequest++; trackingRequest++; });
 </script>
 
 <style scoped lang="scss">

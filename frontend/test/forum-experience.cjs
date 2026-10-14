@@ -24,7 +24,14 @@ test('seek cursors round-trip while filter fingerprints exclude pagination',()=>
  const first=forumFilters({q:'中文',limit:'10'}),second=forumFilters({q:'中文',limit:'10',page:'2',cursor:'signed.payload_cursor-2'});
  assert.deepEqual(forumFilters(forumQuery(second)),second);assert.equal(forumFilterKey(first),forumFilterKey(second));
  assert.notEqual(forumFilterKey(first),forumFilterKey({...first,tagId:'8'}));
- assert.equal(forumFilters({cursor:['bad']}).cursor,'');assert.equal(forumFilters({cursor:'a'.repeat(8193)}).cursor,'');
+ assert.equal(forumFilters({cursor:['bad']}).cursor,'');assert.equal(forumFilters({cursor:'a'.repeat(16001)}).cursor,'');
+ assert.equal(forumFilters({cursor:'a'.repeat(16000)}).cursor.length,16000);
+});
+test('large PIT tokens keep only bounded nearby navigation pages',()=>{
+ const cursors=Object.fromEntries(Array.from({length:100},(_,i)=>[String(i+1),'x'.repeat(16000)]));
+ saveForumNavigation(3,'/forum?page=80',123,{filterKey:'long-tokens',cursors});
+ const value=readForumNavigation(3);assert.equal(Object.keys(value.feed.cursors).length,32);
+ assert.equal(value.feed.cursors['80'].length,16000);assert.equal(value.feed.cursors['1'].length,16000);
 });
 test('saved feed navigation contains account-isolated cursor history, never post content',()=>{
  saveForumNavigation(1,'/forum?page=2&cursor=next',740,{filterKey:'filters',cursors:{1:'start',2:'next'},data:[{content:'must not persist'}]});
