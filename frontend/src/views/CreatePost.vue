@@ -94,9 +94,12 @@ import { forumDraftKey } from '@/utils/forum-experience';
 
 const router = useRouter();
 const route = useRoute(), userStore = useUserStore();
-const editing = computed(() => !!route.params.id);
+// The old editor unmounts after the shared route has already changed. Keep every
+// draft, revision and request bound to this mounted editor, never the next route.
+const editorPostId = String(route.params.id || '');
+const editing = computed(() => !!editorPostId);
 const account = userStore.user?.id || 0;
-const draftKey = forumDraftKey(account, editing.value ? String(route.params.id) : undefined);
+const draftKey = forumDraftKey(account, editorPostId || undefined);
 
 const categories = ref<any[]>([]);
 const tags = ref<any[]>([]);
@@ -120,7 +123,7 @@ const changed = () => ready && !published && snapshot() !== baseline;
 function saveDraft() {
   if (!ready || published || userStore.user?.id !== account) return;
   if (!changed()) { savedLabel.value = ''; return; }
-  try { localStorage.setItem(draftKey, JSON.stringify({ userId: account, postId: String(route.params.id || ''), ...form, revision: revision.value, savedAt: Date.now() }));
+  try { localStorage.setItem(draftKey, JSON.stringify({ userId: account, postId: editorPostId, ...form, revision: revision.value, savedAt: Date.now() }));
     hasDraft.value = true; savedLabel.value = '草稿已保存 · ' + new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
   } catch { savedLabel.value = '草稿未保存，请保持页面打开'; }
 }
@@ -140,7 +143,7 @@ watch(() => userStore.user?.id, id => {
 });
 function restoreDraft() {
   try { const value = JSON.parse(localStorage.getItem(draftKey) || 'null');
-    if (!value || value.userId !== account || value.postId !== String(route.params.id || '') || typeof value.title !== 'string' || typeof value.content !== 'string') return;
+    if (!value || value.userId !== account || value.postId !== editorPostId || typeof value.title !== 'string' || typeof value.content !== 'string') return;
     // Never silently truncate a restored draft; the editor and server share the same limits.
     form.title = value.title; form.content = value.content;
     form.categoryId = Number.isSafeInteger(value.categoryId) ? value.categoryId : null;
@@ -159,8 +162,8 @@ async function clearDraft() {
   else { Object.assign(form, { title: '', categoryId: null, tags: [], content: '' }); baseline = snapshot(); }
   observedForm = snapshot(); ready = true;
 }
-function goBack() { router.push(editing.value ? '/forum/post/' + route.params.id : '/forum'); }
-function openLatest() { window.open(router.resolve('/forum/post/' + route.params.id).href, '_blank', 'noopener'); }
+function goBack() { router.push(editing.value ? '/forum/post/' + editorPostId : '/forum'); }
+function openLatest() { window.open(router.resolve('/forum/post/' + editorPostId).href, '_blank', 'noopener'); }
 function beforeUnload(event: BeforeUnloadEvent) { if (changed()) { saveDraft(); event.preventDefault(); event.returnValue = ''; } }
 onBeforeRouteLeave(async () => {
   if (!changed()) return true; saveDraft();
@@ -215,7 +218,7 @@ const handleSubmit = async () => {
       contentFormat: contentFormat.value,
       ...(editing.value ? { expectedRevision: revision.value } : {}),
     };
-    const data = editing.value ? await request.put('/forum/posts/' + route.params.id, input) : await request.post('/forum/posts', input);
+    const data = editing.value ? await request.put('/forum/posts/' + editorPostId, input) : await request.post('/forum/posts', input);
     published = true; clearTimeout(timer); localStorage.removeItem(draftKey);
     ElMessage.success(editing.value ? '修改已保存' : '发布成功');
     router.push(`/forum/post/${(data as any).id}`);
@@ -232,9 +235,9 @@ onMounted(async () => {
   void loadCategories().catch(() => {}); void loadTags().catch(() => {});
   if (editing.value) {
     loading.value = true;
-    try { const post: any = await request.get('/forum/posts/' + route.params.id);
+    try { const post: any = await request.get('/forum/posts/' + editorPostId);
       if (userStore.user?.id !== account) return;
-      if (post.user.id !== account) { published = true; await router.replace('/forum/post/' + route.params.id); return; }
+      if (post.user.id !== account) { published = true; await router.replace('/forum/post/' + editorPostId); return; }
       Object.assign(form, { title: post.title, content: post.content, categoryId: post.categoryId || post.category?.id || null, tags: post.tags?.map((t: any) => t.tag.name) || [] });
       revision.value = post.revision;
       contentFormat.value = post.contentFormat === 'markdown' ? 'markdown' : 'plain';
