@@ -5,6 +5,7 @@ import { watchChatRun } from '@/utils/chat-stream';
 import { disconnectLocalWorkspace } from '@/utils/local-workspace';
 import { CHAT_NAVIGATION_KEY, emptyChatNavigation, readChatNavigation, type ChatSpace } from '@/utils/chat-navigation';
 import { chatFileRef, type ChatFile } from '@/utils/chat-files';
+import { selectedChatModel } from '@/utils/chat-model-selection';
 
 interface Conversation { id: number; title: string; isPinned: boolean; userId: number; createdAt: string; updatedAt: string;
   conversationType: 'ASSISTANT' | 'ROLEPLAY' | 'LEGACY'; personaKey?: string; personaLabel?: string;
@@ -65,6 +66,8 @@ export const useChatStore = defineStore('chat', () => {
   };
   const saveConversationSettings = (id: number, settings: Partial<ConversationSettings>) =>
     Object.assign(getConversationSettings(id), settings);
+  const selectedModelId = (id?: number) => selectedChatModel(llmConfig.value.models, llmConfig.value.defaultModelId,
+    id ? getConversationSettings(id).modelId : undefined, preferredModelId.value);
   const loadConversations = async () => {
     const epoch = identityEpoch, data = await request.get<Conversation[]>('/chat/conversations');
     if (epoch === identityEpoch) conversations.value = data;
@@ -159,14 +162,14 @@ export const useChatStore = defineStore('chat', () => {
         conversationId: cid, question, mode, enabledSkills, codingWorkspaceId, persona: persona || undefined,
         attachments:attachments?.files.length?attachments.files.map(chatFileRef):undefined,
         customSystemPrompt: customSystemPrompt || undefined, knowledgeBaseId: knowledgeBaseId || undefined,
-        modelId: getConversationSettings(cid).modelId || preferredModelId.value || llmConfig.value.defaultModelId });
+        modelId: selectedModelId(cid) });
       activeRun = run.id;
       attachments?.onAccepted?.();
       if (controller.signal.aborted) { await request.delete('/chat/runs/' + run.id); return false; }
       const reply = pendingReply.value;
       const status = await watchChatRun(run.id, controller.signal, text => {
         reply.content += text; onStream?.(text);
-      });
+      }, progress => { reply.ragMetadata = { ...reply.ragMetadata, performance: progress }; });
       if (status.status === 'COMPLETED') {
         completed=true;
         reply.content = status.result?.content || reply.content;
@@ -205,7 +208,7 @@ export const useChatStore = defineStore('chat', () => {
 
   return { conversations, currentConversation, messages, llmConfig, preferredModelId, isStreaming, conversationSettings,
     navigation, drafts, draftAttachments, isLoadingConversation, initializeNavigation, setSpace, saveView,
-    getConversationSettings, saveConversationSettings, loadConversations, loadDefaultConfig,
+    getConversationSettings, saveConversationSettings, selectedModelId, loadConversations, loadDefaultConfig,
     createConversation, configureIdentity, clearSelection, updateConversation, deleteConversation, deleteMessage, selectConversation,
     sendMessage, sendMessageAgent, sendConfigured: send, stopGeneration, abortController, resetForUser };
 }, { persist: { key: 'chatforum-chat', storage: localStorage, paths: ['conversationSettings', 'preferredModelId'] } });

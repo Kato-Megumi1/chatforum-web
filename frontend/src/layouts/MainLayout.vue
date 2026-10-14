@@ -29,6 +29,7 @@
       </el-menu>
       <div class="header-right">
         <template v-if="userStore.user">
+          <el-badge :value="notifications.unreadCount" :hidden="!notifications.unreadCount" :max="99" class="notification-badge"><el-button class="notification-button" circle text aria-label="消息通知" @click="$router.push('/notifications')"><el-icon><Bell /></el-icon></el-button></el-badge>
           <el-dropdown trigger="click">
             <div class="user-info">
               <el-avatar :size="34" :src="userStore.user.avatar" class="user-avatar">
@@ -43,6 +44,8 @@
                   <el-icon><User /></el-icon>
                   个人中心
                 </el-dropdown-item>
+                <el-dropdown-item @click="$router.push('/user/profile?activity=favorites')">我的收藏</el-dropdown-item>
+                <el-dropdown-item @click="$router.push('/notifications')">消息通知 {{ notifications.unreadCount ? '(' + notifications.unreadCount + ')' : '' }}</el-dropdown-item>
                 <el-dropdown-item divided @click="handleLogout">
                   <el-icon><SwitchButton /></el-icon>
                   退出登录
@@ -58,7 +61,7 @@
       </div>
     </el-header>
     <el-main class="main-content">
-      <router-view />
+      <router-view v-slot="{ Component }"><component :is="Component" :key="route.name === 'EditPost' || route.name === 'CreatePost' ? route.path : undefined" /></router-view>
     </el-main>
     <nav class="mobile-tabbar" aria-label="主要导航">
       <router-link to="/chat" :class="{ active: activeMenu === '/chat' }"><el-icon><ChatDotRound /></el-icon><span>对话</span></router-link>
@@ -71,7 +74,9 @@
 
 <script setup lang="ts">
 import { publicAsset } from '@/utils/api';
-import { computed } from 'vue';
+import { computed, watch, onMounted, onUnmounted } from 'vue';
+import { Bell } from '@element-plus/icons-vue';
+import { useNotificationStore } from '@/stores/notifications';
 import { useRouter, useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useUserStore } from '@/stores/user';
@@ -82,10 +87,18 @@ const mobileViewportStyle = useMobileViewport();
 const router = useRouter();
 const route = useRoute();
 const userStore = useUserStore();
+const notifications = useNotificationStore();
+let notificationTimer: ReturnType<typeof setInterval> | undefined;
+const refreshNotifications = () => { if (!document.hidden) void notifications.refresh(); };
+watch(() => userStore.user?.id, () => { notifications.clear(); if (userStore.user) refreshNotifications(); }, { immediate: true });
+watch(() => route.path, refreshNotifications);
+onMounted(() => { window.addEventListener('focus', refreshNotifications); notificationTimer = setInterval(refreshNotifications, 60000); });
+onUnmounted(() => { window.removeEventListener('focus', refreshNotifications); clearInterval(notificationTimer); });
 
 const activeMenu = computed(() => {
   const path = route.path;
   if (path.startsWith('/forum')) return '/forum';
+  if (path.startsWith('/user') || path === '/notifications') return '/user/profile';
   return path;
 });
 
@@ -194,6 +207,8 @@ const handleLogout = async () => {
   align-items: center;
   gap: 12px;
 }
+.notification-button { color: var(--text-secondary); font-size: 18px; }
+.notification-badge { margin-right: 4px; }
 
 .user-info {
   display: flex;
@@ -264,7 +279,7 @@ const handleLogout = async () => {
   .logo-img { width: 28px; height: 28px; }
   .logo-text { font-size: 17px; color: #303235; letter-spacing: -.4px; }
   .user-info { padding: 0; }
-  .header-right { gap: 0; flex-shrink: 0; }
+  .header-right { gap: 14px; flex-shrink: 0; }
   .mobile-tabbar { display: flex; flex-shrink: 0; justify-content: space-around; padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
     background: #fff; border-top: 1px solid #eeece9; }
   .mobile-tabbar a { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;

@@ -1,5 +1,5 @@
 <template>
-  <div class="forum-container">
+  <div ref="container" class="forum-container" @scroll.passive="savePosition">
     <div class="forum-hero">
       <div class="hero-content">
         <h1>天大论坛</h1>
@@ -18,17 +18,17 @@
             <div
               class="category-item"
               :class="{ active: !categoryId }"
-              @click="categoryId = ''; loadPosts()"
+              @click="setCategory('')"
             >
               <span>全部</span>
-              <span class="category-count">{{ total }}</span>
+              <span class="category-count">{{ categoryTotal }}</span>
             </div>
             <div
               v-for="cat in categories"
               :key="cat.id"
               class="category-item"
               :class="{ active: categoryId === String(cat.id) }"
-              @click="categoryId = String(cat.id); loadPosts()"
+              @click="setCategory(String(cat.id))"
             >
               <span>{{ cat.name }}</span>
               <span class="category-count">{{ cat._count?.posts || 0 }}</span>
@@ -37,14 +37,15 @@
         </div>
         <div class="sidebar-card">
           <div class="card-title">热门标签</div>
-          <div class="tag-cloud">
+          <button class="mobile-tag-toggle" @click="tagsExpanded = !tagsExpanded">{{ tagsExpanded ? '收起标签' : '按标签筛选' }}{{ tagId ? ' · 已选择' : '' }}</button>
+          <div class="tag-cloud" :class="{ expanded: tagsExpanded }">
             <el-tag
               v-for="tag in tags"
               :key="tag.id"
               :effect="tagId === String(tag.id) ? 'dark' : 'plain'"
               :type="tagId === String(tag.id) ? 'primary' : 'info'"
               class="tag-item"
-              @click="tagId === String(tag.id) ? (tagId = '') : (tagId = String(tag.id)); loadPosts()"
+              @click="tagId = tagId === String(tag.id) ? '' : String(tag.id); applyFilters()"
             >
               {{ tag.name }}
             </el-tag>
@@ -56,31 +57,39 @@
           <el-input
             v-model="searchText"
             placeholder="搜索帖子标题或内容..."
+            maxlength="200"
             prefix-icon="Search"
             size="large"
             class="search-input"
-            @keyup.enter="loadPosts"
+            @keyup.enter="applyFilters"
             clearable
-            @clear="loadPosts"
+            @clear="applyFilters"
           />
-          <el-radio-group v-model="sortBy" size="default" @change="loadPosts" class="sort-group">
+          <el-radio-group v-model="sortBy" size="default" @change="applyFilters" class="sort-group">
             <el-radio-button value="createdAt">最新</el-radio-button>
             <el-radio-button value="popular">热门</el-radio-button>
             <el-radio-button value="likes">最多点赞</el-radio-button>
           </el-radio-group>
+          <el-select v-if="sortBy === 'popular'" v-model="hotPeriod" class="hot-period" aria-label="热门范围" @change="applyFilters">
+            <el-option label="今日热门" value="today" /><el-option label="本周热门" value="week" /><el-option label="全部热门" value="all" />
+          </el-select>
         </div>
+        <div v-if="searchText || categoryId || tagId" class="filter-summary"><span>{{ total }} 条结果</span><el-button link @click="clearFilters">清除筛选</el-button></div>
+        <el-alert v-if="loadError" title="暂时没能加载帖子，请重试" type="error" :closable="false"><el-button link @click="loadPosts">重新加载</el-button></el-alert>
         <div class="post-list" v-loading="loading">
           <div v-if="posts.length === 0 && !loading" class="empty-posts">
             <el-icon :size="48" color="#C9CDD4"><Document /></el-icon>
             <p>暂无帖子</p>
           </div>
-          <div v-for="post in posts" :key="post.id" class="post-card" @click="goToDetail(post.id)">
+          <router-link v-for="post in posts" :key="post.id" :to="'/forum/post/' + post.id" class="post-card" @click="savePosition">
             <div class="post-card-header">
               <div class="post-badges">
                 <el-tag v-if="post.isTop" type="danger" size="small" effect="dark">置顶</el-tag>
                 <el-tag v-if="post.isEssence" type="warning" size="small" effect="dark">精华</el-tag>
+                <span v-if="post.category" class="post-category">{{ post.category.name }}</span>
               </div>
               <h3 class="post-title">{{ post.title }}</h3>
+              <p v-if="post.summary" class="post-summary">{{ post.summary }}</p>
             </div>
             <div class="post-card-footer">
               <div class="post-author">
@@ -105,7 +114,8 @@
                 <span class="stat-time">{{ formatTime(post.createdAt) }}</span>
               </div>
             </div>
-          </div>
+            <div v-if="post.lastReplyAt" class="last-reply">最近回复 · {{ formatTime(post.lastReplyAt) }}</div>
+          </router-link>
         </div>
         <div class="pagination-wrapper" v-if="total > 0">
           <el-pagination
@@ -115,8 +125,8 @@
             :page-sizes="[10, 20, 50]"
             :pager-count="5"
             layout="total, sizes, prev, pager, next, jumper"
-            @current-change="loadPosts"
-            @size-change="loadPosts"
+            @current-change="changePage"
+            @size-change="applyFilters"
           />
         </div>
       </div>
@@ -125,8 +135,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue';
-import { useRouter } from 'vue-router';
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
+import { useRouter, useRoute, onBeforeRouteLeave } from 'vue-router';
+import { forumFilters, forumQuery, readForumNavigation, saveForumNavigation } from '@/utils/forum-experience';
 import request from '@/utils/request';
 import { useUserStore } from '@/stores/user';
 import dayjs from 'dayjs';
@@ -137,11 +148,13 @@ dayjs.extend(relativeTime);
 dayjs.locale('zh-cn');
 
 const router = useRouter();
+const route = useRoute();
 const userStore = useUserStore();
 
 const posts = ref<any[]>([]);
 const categories = ref<any[]>([]);
 const tags = ref<any[]>([]);
+const categoryTotal = computed(() => categories.value.reduce((sum, category) => sum + (category._count?.posts || 0), 0));
 const categoryId = ref('');
 const tagId = ref('');
 const searchText = ref('');
@@ -150,24 +163,50 @@ const page = ref(1);
 const pageSize = ref(20);
 const total = ref(0);
 const loading = ref(false);
+const loadError = ref(false), hotPeriod = ref('week'), tagsExpanded = ref(false), container = ref<HTMLElement | null>(null);
+let requestId = 0, restorePosition = false, initialLoad = true;
+const savedNavigation = readForumNavigation(userStore.user?.id || 0);
+function savePosition() { saveForumNavigation(userStore.user?.id || 0, route.fullPath, container.value?.scrollTop || 0); }
+function filters() { return { categoryId: categoryId.value, tagId: tagId.value, search: searchText.value, sortBy: sortBy.value, hotPeriod: hotPeriod.value, page: page.value, limit: pageSize.value }; }
+function applyFilters() { page.value = 1; void navigate(); }
+function setCategory(id: string) { categoryId.value = id; applyFilters(); }
+function clearFilters() { categoryId.value = ''; tagId.value = ''; searchText.value = ''; applyFilters(); }
+function changePage() { void navigate(); }
+async function navigate() {
+  restorePosition = false;
+  const target = { path: '/forum', query: forumQuery(filters()) };
+  if (router.resolve(target).fullPath === route.fullPath) { await loadPosts(); container.value?.scrollTo({ top: 0 }); }
+  else await router.push(target);
+}
 
 const loadPosts = async () => {
+  const stamp = ++requestId, account = userStore.user?.id;
   loading.value = true;
+  loadError.value = false;
   try {
     const params: any = {
       page: page.value,
       limit: pageSize.value,
       sortBy: sortBy.value,
     };
+    if (sortBy.value === 'popular') params.hotPeriod = hotPeriod.value;
     if (categoryId.value) params.categoryId = categoryId.value;
     if (tagId.value) params.tagId = tagId.value;
     if (searchText.value) params.search = searchText.value;
 
     const data = await request.get('/forum/posts', { params });
+    if (stamp !== requestId || account !== userStore.user?.id) return;
     posts.value = data.data;
     total.value = data.total;
+    if (!posts.value.length && page.value > 1 && data.total > 0) { page.value = Math.max(1, Math.ceil(data.total / pageSize.value)); await navigate(); return; }
+    await nextTick();
+    if (restorePosition && savedNavigation?.path === route.fullPath) container.value?.scrollTo({ top: savedNavigation.scroll });
+    else container.value?.scrollTo({ top: 0 });
+    restorePosition = false;
+    savePosition();
+  } catch { if (stamp === requestId) loadError.value = true;
   } finally {
-    loading.value = false;
+    if (stamp === requestId) loading.value = false;
   }
 };
 
@@ -181,25 +220,30 @@ const loadTags = async () => {
   tags.value = data;
 };
 
-const goToDetail = (id: number) => {
-  router.push(`/forum/post/${id}`);
-};
-
 const formatTime = (time: string) => {
   return dayjs(time).fromNow();
 };
 
 let tagTimer: ReturnType<typeof setInterval> | null = null;
 
+watch(() => route.fullPath, () => {
+  if (route.path !== '/forum') return;
+  const f = forumFilters(route.query); categoryId.value = f.categoryId; tagId.value = f.tagId; searchText.value = f.search;
+  sortBy.value = f.sortBy; hotPeriod.value = f.hotPeriod; page.value = f.page; pageSize.value = f.limit;
+  restorePosition = initialLoad && savedNavigation?.path === route.fullPath;
+  initialLoad = false;
+  void loadPosts();
+}, { immediate: true });
+onBeforeRouteLeave(() => { savePosition(); requestId++; });
 onMounted(() => {
-  loadPosts();
-  loadCategories();
-  loadTags();
+  void loadCategories().catch(() => {});
+  void loadTags().catch(() => {});
   // 每 5 分钟刷新热门标签
-  tagTimer = setInterval(loadTags, 5 * 60 * 1000);
+  tagTimer = setInterval(() => void loadTags().catch(() => {}), 5 * 60 * 1000);
 });
 
 onUnmounted(() => {
+  requestId++;
   if (tagTimer) clearInterval(tagTimer);
 });
 </script>
@@ -378,6 +422,9 @@ onUnmounted(() => {
 }
 
 .post-card {
+  display: block;
+  color: inherit;
+  text-decoration: none;
   background: #fff;
   border-radius: var(--radius-md);
   padding: 20px 24px;
@@ -393,6 +440,12 @@ onUnmounted(() => {
     transform: translateX(2px);
   }
 }
+.post-summary { margin: 8px 0 0; font-size: 13px; line-height: 1.8; color: var(--text-secondary); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.post-category { font-size: 11px; color: var(--primary-dark); background: var(--primary-bg); padding: 2px 8px; border-radius: 8px; }
+.last-reply { font-size: 11px; color: var(--text-secondary); margin-top: 12px; }
+.hot-period { width: 124px; flex-shrink: 0; }
+.mobile-tag-toggle { display: none; }
+.filter-summary { display: flex; align-items: center; gap: 16px; font-size: 12px; color: var(--text-secondary); padding-bottom: 12px; }
 
 .post-card-header {
   margin-bottom: 14px;
@@ -464,6 +517,10 @@ onUnmounted(() => {
 }
 
 @media (max-width: 900px) {
+  .content-toolbar { position: sticky; top: 0; z-index: 3; background: #faf9f7; padding: 10px 0; }
+  .mobile-tag-toggle { display: block; border: 0; padding: 4px 0; background: transparent; color: #897480; font-size: 12px; }
+  .tag-cloud:not(.expanded) { display: none; }
+  .hot-period { width: 112px; margin-left: auto; }
   .content-toolbar { flex-wrap: wrap; }
   .search-input { flex-basis: 100%; max-width: none; }
   .post-card-footer { flex-wrap: wrap; gap: 12px; }

@@ -1,15 +1,16 @@
 <template>
   <div class="create-post-container">
     <div class="create-post-wrapper">
-      <el-page-header @back="$router.back()" title="返回" class="page-header" />
-      <div class="create-post-main">
-        <h1 class="page-title">发布帖子</h1>
+      <el-page-header @back="goBack" title="返回" class="page-header" />
+      <div class="create-post-main" v-loading="loading">
+        <div class="editor-heading"><h1 class="page-title">{{ editing ? '编辑帖子' : '发布帖子' }}</h1><span class="draft-state" aria-live="polite">{{ savedLabel }}</span></div>
+        <el-alert v-if="conflict" type="warning" title="帖子已被其他页面修改，你的草稿仍在。请先查看最新内容再决定如何合并。" :closable="false"><el-button link @click="openLatest">查看最新内容</el-button></el-alert>
         <el-form :model="form" label-position="top" class="post-form">
           <el-form-item label="标题">
             <el-input
               v-model="form.title"
               placeholder="请输入帖子标题"
-              maxlength="100"
+              maxlength="150"
               show-word-limit
               size="large"
             />
@@ -44,20 +45,27 @@
             </el-col>
           </el-row>
           <el-form-item label="内容">
+            <div class="editor-switch"><el-button :type="preview ? 'default' : 'primary'" size="small" plain @click="preview = false">编辑</el-button><el-button :type="preview ? 'primary' : 'default'" size="small" plain @click="preview = true">预览</el-button></div>
             <el-input
+              v-if="!preview"
               v-model="form.content"
               type="textarea"
               :rows="18"
+              maxlength="50000"
+              show-word-limit
               placeholder="想说什么就直接写吧..."
               class="content-textarea"
+              aria-label="帖子内容"
             />
+            <div v-else class="plain-preview">{{ form.content || '写下内容后，就能在这里查看排版。' }}</div>
           </el-form-item>
           <el-form-item>
             <div class="form-actions">
               <el-button type="primary" :loading="submitting" @click="handleSubmit" size="large" round class="btn-submit">
-                发布帖子
+                {{ editing ? '保存修改' : '发布帖子' }}
               </el-button>
-              <el-button size="large" round @click="$router.back()">取消</el-button>
+              <el-button size="large" round @click="goBack">返回</el-button>
+              <el-button v-if="hasDraft" link type="info" @click="clearDraft">清除草稿</el-button>
             </div>
           </el-form-item>
         </el-form>
@@ -67,22 +75,77 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue';
-import { useRouter } from 'vue-router';
-import { ElMessage } from 'element-plus';
+import { ref, reactive, onMounted, onUnmounted, watch, computed } from 'vue';
+import { useRouter, useRoute, onBeforeRouteLeave } from 'vue-router';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import request from '@/utils/request';
+import { useUserStore } from '@/stores/user';
+import { forumDraftKey } from '@/utils/forum-experience';
 
 const router = useRouter();
+const route = useRoute(), userStore = useUserStore();
+const editing = computed(() => !!route.params.id);
+const account = userStore.user?.id || 0;
+const draftKey = forumDraftKey(account, editing.value ? String(route.params.id) : undefined);
 
 const categories = ref<any[]>([]);
 const tags = ref<any[]>([]);
 const submitting = ref(false);
+const loading = ref(false), preview = ref(false), hasDraft = ref(false), conflict = ref(false), savedLabel = ref('');
+const revision = ref(0);
+const contentFormat = ref<'plain' | 'markdown'>('plain');
+let ready = false, published = false, timer: ReturnType<typeof setTimeout> | undefined, baseline = '';
 
 const form = reactive({
   title: '',
   categoryId: null as number | null,
   tags: [] as string[],
   content: '',
+});
+const snapshot = () => JSON.stringify({ ...form, revision: revision.value });
+const changed = () => ready && !published && snapshot() !== baseline;
+function saveDraft() {
+  if (!ready || published || userStore.user?.id !== account) return;
+  if (!changed()) { savedLabel.value = ''; return; }
+  try { localStorage.setItem(draftKey, JSON.stringify({ userId: account, postId: String(route.params.id || ''), ...form, revision: revision.value, savedAt: Date.now() }));
+    hasDraft.value = true; savedLabel.value = '草稿已保存 · ' + new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  } catch { savedLabel.value = '草稿未保存，请保持页面打开'; }
+}
+watch(form, () => { if (!ready) return; savedLabel.value = '正在保存…'; clearTimeout(timer); timer = setTimeout(saveDraft, 500); }, { deep: true, flush: 'sync' });
+watch(() => userStore.user?.id, id => {
+  if (id === account) return;
+  ready = false; published = true; clearTimeout(timer);
+  Object.assign(form, { title: '', categoryId: null, tags: [], content: '' });
+  savedLabel.value = ''; hasDraft.value = false;
+});
+function restoreDraft() {
+  try { const value = JSON.parse(localStorage.getItem(draftKey) || 'null');
+    if (!value || value.userId !== account || value.postId !== String(route.params.id || '') || typeof value.title !== 'string' || typeof value.content !== 'string') return;
+    // Never silently truncate a restored draft; the editor and server share the same limits.
+    form.title = value.title; form.content = value.content;
+    form.categoryId = Number.isSafeInteger(value.categoryId) ? value.categoryId : null;
+    form.tags = Array.isArray(value.tags) ? value.tags.filter((s: unknown) => typeof s === 'string').slice(0, 10) : [];
+    // Keep the draft's base revision; restoring it must not silently overwrite newer edits.
+    if (editing.value && Number.isSafeInteger(value.revision)) { conflict.value = revision.value !== value.revision; revision.value = value.revision; }
+    hasDraft.value = true; savedLabel.value = '已恢复上次草稿';
+  } catch { /* malformed or unavailable local draft is ignored */ }
+}
+async function clearDraft() {
+  try { await ElMessageBox.confirm('清除后不能恢复这份本机草稿。', '清除草稿？', { confirmButtonText: '清除', cancelButtonText: '保留' }); }
+  catch { return; }
+  clearTimeout(timer); localStorage.removeItem(draftKey); hasDraft.value = false; savedLabel.value = '草稿已清除';
+  ready = false;
+  if (editing.value) { const original = JSON.parse(baseline); Object.assign(form, { title: original.title, categoryId: original.categoryId, tags: original.tags, content: original.content }); revision.value = original.revision; conflict.value = false; }
+  else { Object.assign(form, { title: '', categoryId: null, tags: [], content: '' }); baseline = snapshot(); }
+  ready = true;
+}
+function goBack() { router.push(editing.value ? '/forum/post/' + route.params.id : '/forum'); }
+function openLatest() { window.open(router.resolve('/forum/post/' + route.params.id).href, '_blank', 'noopener'); }
+function beforeUnload(event: BeforeUnloadEvent) { if (changed()) { saveDraft(); event.preventDefault(); event.returnValue = ''; } }
+onBeforeRouteLeave(async () => {
+  if (!changed()) return true; saveDraft();
+  try { await ElMessageBox.confirm(hasDraft.value ? '未发布内容已保存在本机草稿，之后可继续编辑。' : '草稿未能保存，离开会丢失未发布内容。', '离开编辑页面？', { confirmButtonText: '离开', cancelButtonText: '继续编辑' }); return true; }
+  catch { return false; }
 });
 
 const loadCategories = async () => {
@@ -96,6 +159,7 @@ const loadTags = async () => {
 };
 
 const handleSubmit = async () => {
+  if (userStore.user?.id !== account) { ElMessage.warning('登录账号已变化，请重新打开编辑页面'); return; }
   if (!form.title.trim()) {
     ElMessage.warning('请输入标题');
     return;
@@ -113,23 +177,42 @@ const handleSubmit = async () => {
 
   submitting.value = true;
   try {
-    const data = await request.post('/forum/posts', {
+    const input = {
       title: form.title.trim(),
       categoryId: form.categoryId,
       tags: form.tags,
       content: form.content.trim(),
-    });
-    ElMessage.success('发布成功');
+      contentFormat: contentFormat.value,
+      ...(editing.value ? { expectedRevision: revision.value } : {}),
+    };
+    const data = editing.value ? await request.put('/forum/posts/' + route.params.id, input) : await request.post('/forum/posts', input);
+    published = true; clearTimeout(timer); localStorage.removeItem(draftKey);
+    ElMessage.success(editing.value ? '修改已保存' : '发布成功');
     router.push(`/forum/post/${(data as any).id}`);
+  } catch (error: any) {
+    if (error.response?.status === 409) conflict.value = true;
+    saveDraft();
   } finally {
     submitting.value = false;
   }
 };
 
-onMounted(() => {
-  loadCategories();
-  loadTags();
+onMounted(async () => {
+  window.addEventListener('beforeunload', beforeUnload);
+  void loadCategories().catch(() => {}); void loadTags().catch(() => {});
+  if (editing.value) {
+    loading.value = true;
+    try { const post: any = await request.get('/forum/posts/' + route.params.id);
+      if (userStore.user?.id !== account) return;
+      if (post.user.id !== account) { published = true; await router.replace('/forum/post/' + route.params.id); return; }
+      Object.assign(form, { title: post.title, content: post.content, categoryId: post.categoryId || post.category?.id || null, tags: post.tags?.map((t: any) => t.tag.name) || [] });
+      revision.value = post.revision;
+      contentFormat.value = post.contentFormat === 'markdown' ? 'markdown' : 'plain';
+    } catch { published = true; await router.replace('/forum'); return; } finally { loading.value = false; }
+  }
+  baseline = snapshot(); restoreDraft(); ready = true;
 });
+onUnmounted(() => { clearTimeout(timer); saveDraft(); window.removeEventListener('beforeunload', beforeUnload); });
 </script>
 
 <style lang="scss" scoped>
@@ -162,6 +245,10 @@ onMounted(() => {
   font-weight: 700;
   color: var(--text-primary);
 }
+.editor-heading { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 12px; }
+.draft-state { color: var(--text-secondary); font-size: 12px; margin-bottom: 16px; }
+.editor-switch { display: flex; width: 100%; gap: 8px; margin-bottom: 10px; }
+.plain-preview { min-height: 360px; white-space: pre-wrap; overflow-wrap: anywhere; width: 100%; padding: 16px; line-height: 1.9; color: var(--text-primary); border: 1px solid var(--border-light); border-radius: 10px; }
 
 .post-form {
   :deep(.el-form-item__label) {

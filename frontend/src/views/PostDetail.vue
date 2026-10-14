@@ -1,21 +1,23 @@
 <template>
-  <div class="post-page"><div class="post-wrapper">
-    <el-page-header @back="$router.back()" title="返回讨论" />
+  <div ref="container" class="post-page"><div class="post-wrapper">
+    <el-page-header @back="goBack" title="返回讨论" />
     <el-skeleton v-if="loading" :rows="8" animated class="post-card" />
     <el-empty v-else-if="!post" description="帖子暂时无法访问"><el-button @click="load">重试</el-button></el-empty>
     <article v-else class="post-card">
-      <div class="eyebrow">COMMUNITY · 原作与日常</div>
+      <div class="eyebrow">COMMUNITY · {{ post.category?.name || '校园交流' }}</div>
       <h1>{{ post.title }}</h1>
       <div class="post-meta">
         <el-avatar :size="36" :src="post.user.avatar">{{ post.user.username.slice(0, 1) }}</el-avatar>
-        <strong>{{ post.user.username }}</strong><span>{{ formatTime(post.createdAt) }}</span>
+        <router-link class="author-link" :to="'/user/' + post.user.id"><strong>{{ post.user.username }}</strong></router-link><span>{{ formatTime(post.createdAt) }}</span>
         <span>{{ post.viewCount }} 阅读 · {{ post.commentCount }} 条评论</span>
       </div>
-      <div class="post-content">{{ post.content }}</div>
+      <div v-if="post.contentFormat === 'markdown'" class="post-content legacy-content" v-html="legacyContent" @click="handleLegacyLink" />
+      <div v-else class="post-content">{{ post.content }}</div>
       <div class="tags"><el-tag v-for="pt in post.tags" :key="pt.tag.id" effect="plain" round>{{ pt.tag.name }}</el-tag></div>
       <div class="post-actions">
         <el-button round :type="post.isLiked ? 'primary' : 'default'" :loading="busy.has('like')" @click="togglePost('like')">{{ post.isLiked ? '已点赞' : '点赞' }} {{ post.likeCount }}</el-button>
         <el-button round :type="post.isFavorited ? 'primary' : 'default'" :loading="busy.has('favorite')" @click="togglePost('favorite')">{{ post.isFavorited ? '已收藏' : '收藏' }}</el-button>
+        <el-button v-if="post.user.id === userStore.user?.id" round @click="$router.push('/forum/post/' + post.id + '/edit')">编辑帖子</el-button>
       </div>
       <section class="discussion">
         <div class="discussion-heading"><h2>一起聊聊 <span>{{ post.commentCount }}</span></h2>
@@ -24,6 +26,7 @@
           </el-select>
         </div>
         <p class="hint">聊聊你的看法；涉及后续剧情时，记得先提醒剧透。</p>
+        <p v-if="focusUnavailable" class="hint" role="status">这条评论已不可访问，以下是帖子的当前讨论。</p>
         <div v-if="userStore.user" class="composer">
           <el-input v-model="commentText" type="textarea" :rows="3" maxlength="4000" show-word-limit placeholder="哪一个瞬间让你印象最深？" aria-label="评论内容" />
           <div class="composer-actions"><span>友善讨论，尊重不同解读</span><el-button type="primary" round :loading="submitting" :disabled="!commentText.trim()" @click="submitComment">发表评论</el-button></div>
@@ -31,10 +34,10 @@
         <el-button v-else plain round @click="$router.push('/login')">登录后参与讨论</el-button>
         <div v-loading="commentsLoading" class="comments">
           <el-empty v-if="!comments.length && !commentsLoading" :image-size="72" description="还没有评论，来开启这段讨论吧" />
-          <div v-for="comment in comments" :key="comment.id" class="comment">
+          <div v-for="comment in comments" :key="comment.id" :id="'comment-' + comment.id" class="comment" :class="{ 'new-comment': highlightedId === comment.id }">
             <el-avatar :size="36" :src="comment.user.avatar">{{ comment.user.username.slice(0, 1) }}</el-avatar>
             <div class="comment-body">
-              <div class="comment-meta"><strong>{{ comment.user.username }}</strong><span>{{ formatTime(comment.createdAt) }}</span></div>
+              <div class="comment-meta"><router-link class="author-link" :to="'/user/' + comment.user.id"><strong>{{ comment.user.username }}</strong></router-link><span>{{ formatTime(comment.createdAt) }}</span></div>
               <p class="comment-text" :class="{ deleted: comment.status === 'DELETED' }">{{ comment.content }}</p>
               <div class="comment-actions" v-if="comment.status !== 'DELETED'">
                 <el-button link :type="comment.isLiked ? 'primary' : 'info'" :disabled="busy.has('c' + comment.id)" @click="toggleComment(comment)">赞 {{ comment.likeCount || '' }}</el-button>
@@ -46,8 +49,8 @@
                 <div class="composer-actions"><el-button link @click="replyTo = null">取消</el-button><el-button type="primary" size="small" :loading="replySubmitting" :disabled="!replyText.trim()" @click="submitReply(comment)">发送回复</el-button></div>
               </div>
               <div v-if="comment.replies?.length" class="replies">
-                <div v-for="reply in comment.replies" :key="reply.id" class="reply">
-                  <strong>{{ reply.user.username }}</strong><span class="reply-date">{{ formatTime(reply.createdAt) }}</span>
+                <div v-for="reply in comment.replies" :key="reply.id" :id="'comment-' + reply.id" class="reply" :class="{ 'new-comment': highlightedId === reply.id }">
+                  <router-link class="author-link" :to="'/user/' + reply.user.id"><strong>{{ reply.user.username }}</strong></router-link><span class="reply-date">{{ formatTime(reply.createdAt) }}</span>
                   <p class="comment-text">{{ reply.content }}</p>
                   <el-button v-if="reply.canDelete" link size="small" type="danger" :disabled="busy.has('d' + reply.id)" @click="removeComment(reply)">删除</el-button>
                 </div>
@@ -57,15 +60,19 @@
             </div>
           </div>
         </div>
-        <el-pagination v-if="total > 10" class="pagination" background layout="prev, pager, next" :pager-count="5" :page-size="10" :total="total" v-model:current-page="page" @current-change="loadComments" />
+        <el-pagination v-if="total > 10" class="pagination" background layout="prev, pager, next" :pager-count="5" :page-size="10" :total="total" v-model:current-page="page" @current-change="changeCommentPage" />
       </section>
     </article>
   </div></div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, watch } from 'vue';
-import { useRoute } from 'vue-router';
+import { ref, reactive, watch, computed, nextTick, onUnmounted } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import { readForumNavigation } from '@/utils/forum-experience';
+import { forumPostPath, resolveForumLinks } from '@/utils/forum-links';
+import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import request from '@/utils/request';
 import { useUserStore } from '@/stores/user';
@@ -73,23 +80,57 @@ import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import 'dayjs/locale/zh-cn';
 dayjs.extend(relativeTime); dayjs.locale('zh-cn');
-const route = useRoute(), userStore = useUserStore();
+const route = useRoute(), router = useRouter(), userStore = useUserStore();
 const post = ref<any>(null), comments = ref<any[]>([]), loading = ref(true), commentsLoading = ref(false);
 const page = ref(1), total = ref(0), sortOrder = ref('desc'), commentText = ref(''), replyText = ref('');
 const replyTo = ref<number | null>(null), submitting = ref(false), replySubmitting = ref(false);
 const expanded = reactive<Record<number, number>>({}), busy = reactive(new Set<string>());
+const highlightedId = ref<number | null>(null), container = ref<HTMLElement | null>(null);
+const focusUnavailable = ref(false);
+const legacyContent = computed(() => {
+  const safe = DOMPurify.sanitize(marked.parse(post.value?.content || '', { async: false }) as string,
+    { FORBID_TAGS: ['style', 'iframe', 'form', 'input'], FORBID_ATTR: ['style', 'data-forum-post-path'] });
+  return resolveForumLinks(safe, path => router.resolve(path).href);
+});
+function handleLegacyLink(event: MouseEvent) {
+  if (event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+  const link = (event.target as Element)?.closest('a[data-forum-post-path]');
+  const path = forumPostPath(link?.getAttribute('data-forum-post-path') || '');
+  if (path) { event.preventDefault(); router.push(path); }
+}
 let generation = 0, commentRequest = 0;
+const threadRevisions = new Map<number, number>();
+function invalidateCommentRead() { commentRequest++; commentsLoading.value = false; }
+function mutateThread(id: number) { threadRevisions.set(id, (threadRevisions.get(id) || 0) + 1); invalidateCommentRead(); }
+let focusPending = true;
+function goBack() {
+  const previous = window.history.state?.back;
+  if (typeof previous === 'string' && /^\/chat(?:\?|$)/.test(previous)) { router.back(); return; }
+  const saved = readForumNavigation(userStore.user?.id || 0); router.push(saved?.path || '/forum');
+}
+async function focusComment(id: number) { highlightedId.value = id; await nextTick(); document.getElementById('comment-' + id)?.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
 const formatTime = (time: string) => dayjs(time).fromNow();
 const loggedIn = () => { if (userStore.user) return true; ElMessage.warning('请先登录'); return false; };
 async function loadComments() {
   const stamp = ++commentRequest, id = route.params.id;
   commentsLoading.value = true;
   try {
-    const data: any = await request.get('/forum/posts/' + id + '/comments', { params: { page: page.value, limit: 10, sortOrder: sortOrder.value } });
+    const focusId = focusPending && /^\d+$/.test(String(route.query.comment || '')) ? Number(route.query.comment) : undefined;
+    const params = { page: page.value, limit: 10, sortOrder: sortOrder.value };
+    let data: any;
+    try { data = await request.get('/forum/posts/' + id + '/comments', { params: { ...params, ...(focusId ? { commentId: focusId } : {}) } }); }
+    catch (error: any) {
+      if (!focusId || error.response?.status !== 404) throw error;
+      if (stamp !== commentRequest || id !== route.params.id) return;
+      // A withdrawn notification target is not a failure to load the entire discussion.
+      focusPending = false; focusUnavailable.value = true; highlightedId.value = null;
+      data = await request.get('/forum/posts/' + id + '/comments', { params });
+    }
     if (stamp !== commentRequest || id !== route.params.id) return;
     comments.value = data.data; total.value = data.total;
+    if (data.page) page.value = data.page;
     if (post.value) post.value.commentCount = data.activeCount;
-    Object.keys(expanded).forEach(key => delete expanded[Number(key)]);
+    if (focusId) { focusPending = false; if (data.focusId) await focusComment(data.focusId); }
   } catch { /* shared request handler displays errors; preserve editor contents */ }
   finally { if (stamp === commentRequest) commentsLoading.value = false; }
 }
@@ -98,9 +139,20 @@ async function load() {
   try { const data = await request.get('/forum/posts/' + route.params.id); if (stamp === generation) post.value = data; }
   catch { /* empty state offers retry */ }
   finally { if (stamp === generation) loading.value = false; }
-  if (stamp === generation && post.value) await loadComments();
+  if (stamp === generation && post.value) {
+    const target = post.value.id;
+    await loadComments();
+    if (stamp !== generation) return;
+    try {
+      const stored = sessionStorage.getItem('forum-viewer-token');
+      const viewed: any = await request.post('/forum/posts/' + target + '/view', stored ? { viewerToken: stored } : {});
+      if (viewed.viewerToken) sessionStorage.setItem('forum-viewer-token', viewed.viewerToken);
+      if (stamp === generation) post.value.viewCount = viewed.viewCount;
+    } catch { /* view measurement failure must not block reading */ }
+  }
 }
-function changeSort() { page.value = 1; void loadComments(); }
+function changeSort() { page.value = 1; focusPending = false; Object.keys(expanded).forEach(key => delete expanded[Number(key)]); void loadComments(); }
+function changeCommentPage() { focusPending = false; Object.keys(expanded).forEach(key => delete expanded[Number(key)]); void loadComments(); }
 async function locked(key: string, fn: () => Promise<void>) {
   if (busy.has(key)) return; busy.add(key);
   try { await fn(); } catch { /* request interceptor reports failures */ } finally { busy.delete(key); }
@@ -128,35 +180,55 @@ async function submitComment() {
   if (submitting.value || !commentText.value.trim() || !loggedIn()) return;
   const id = post.value.id; submitting.value = true;
   try {
-    await request.post('/forum/posts/' + id + '/comments', { content: commentText.value.trim() });
+    const added: any = await request.post('/forum/posts/' + id + '/comments', { content: commentText.value.trim() });
     if (id !== post.value?.id) return;
-    commentText.value = ''; page.value = 1; sortOrder.value = 'desc'; await loadComments(); ElMessage.success('评论已发布');
+    commentText.value = ''; invalidateCommentRead();
+    // Locally show this user's new comment without replacing the thread or collapsing replies.
+    if (sortOrder.value === 'desc') comments.value.unshift(added); else comments.value.push(added);
+    total.value++; post.value.commentCount++;
+    await focusComment(added.id); ElMessage.success('评论已发布');
   } catch { /* keep the draft on failure */ } finally { submitting.value = false; }
 }
 async function submitReply(comment: any) {
   if (replySubmitting.value || !replyText.value.trim() || !loggedIn()) return;
   const id = post.value.id; replySubmitting.value = true;
   try {
-    await request.post('/forum/posts/' + id + '/comments', { content: replyText.value.trim(), parentId: comment.id });
+    const added: any = await request.post('/forum/posts/' + id + '/comments', { content: replyText.value.trim(), parentId: comment.id });
     if (id !== post.value?.id) return;
-    replyText.value = ''; replyTo.value = null; await loadComments(); ElMessage.success('回复已发布');
+    replyText.value = ''; replyTo.value = null;
+    mutateThread(comment.id);
+    comment.replies = [...(comment.replies || []), added]; comment.replyCount++; post.value.commentCount++;
+    await focusComment(added.id); ElMessage.success('回复已发布');
   } catch { /* keep the draft on failure */ } finally { replySubmitting.value = false; }
 }
 async function loadReplies(comment: any, nextPage: number) {
+  const target = post.value.id, stamp = generation, revision = threadRevisions.get(comment.id) || 0;
   await locked('r' + comment.id, async () => {
-    const result: any = await request.get('/forum/posts/' + post.value.id + '/comments', { params: { parentId: comment.id, page: nextPage, limit: 10, sortOrder: 'asc' } });
+    const result: any = await request.get('/forum/posts/' + target + '/comments', { params: { parentId: comment.id, page: nextPage, limit: 10, sortOrder: 'asc' } });
+    if (target !== post.value?.id || stamp !== generation || revision !== (threadRevisions.get(comment.id) || 0)) return;
     comment.replies = result.data; comment.replyCount = result.total; expanded[comment.id] = nextPage;
   });
 }
 async function removeComment(comment: any) {
+  const target = post.value?.id, stamp = generation, account = userStore.user?.id;
   await locked('d' + comment.id, async () => {
     await ElMessageBox.confirm('删除后正文不再显示，其他人的回复会保留。', '删除这条评论？', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '保留' });
+    if (target !== post.value?.id || stamp !== generation || account !== userStore.user?.id) return;
     await request.delete('/forum/comments/' + comment.id);
-    if (comments.value.length === 1 && !comment.parentId && page.value > 1) page.value--;
-    await loadComments();
+    if (target !== post.value?.id || stamp !== generation || account !== userStore.user?.id) return;
+    mutateThread(comment.parentId || comment.id);
+    comment.status = 'DELETED'; comment.content = '评论已删除'; comment.canDelete = false;
+    if (comment.parentId) { const parent = comments.value.find(c => c.id === comment.parentId); if (parent) parent.replyCount = Math.max(0, parent.replyCount - 1); }
+    post.value.commentCount = Math.max(0, post.value.commentCount - 1);
   });
 }
-watch(() => route.params.id, () => { page.value = 1; commentText.value = ''; replyText.value = ''; replyTo.value = null; void load(); }, { immediate: true });
+watch(() => [route.params.id, route.query.comment], () => {
+  generation++; commentRequest++; focusPending = true; page.value = 1; commentText.value = ''; replyText.value = ''; replyTo.value = null;
+  focusUnavailable.value = false; highlightedId.value = null;
+  Object.keys(expanded).forEach(key => delete expanded[Number(key)]); void load();
+  threadRevisions.clear();
+}, { immediate: true });
+onUnmounted(() => { generation++; commentRequest++; });
 </script>
 
 <style scoped lang="scss">
@@ -168,7 +240,14 @@ h1 { font-size: 27px; line-height: 1.5; margin: 12px 0 18px; overflow-wrap: anyw
 .post-meta, .post-actions, .tags, .comment-meta { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .post-meta, .comment-meta span, .hint, .reply-date { font-size: 12px; color: var(--text-secondary); }
 .post-meta strong, .comment-meta strong { color: var(--text-primary); font-size: 14px; }
+.author-link { color: inherit; text-decoration: none; } .author-link:hover { color: var(--primary-color); }
+.new-comment { background: #eef7ff; border-radius: 10px; box-shadow: 0 0 0 8px #eef7ff; }
 .post-content { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.95; padding: 28px 0; font-size: 15px; }
+.legacy-content { white-space: normal; }
+.legacy-content :deep(img) { display: block; max-width: 100%; height: auto; border-radius: 10px; margin: 16px 0; }
+.legacy-content :deep(a) { color: var(--primary-color); }
+.legacy-content :deep(pre) { max-width: 100%; overflow-x: auto; white-space: pre; background: #f6f8fb; padding: 14px; border-radius: 10px; }
+.legacy-content :deep(table) { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
 .post-actions { padding: 24px 0 4px; }
 .discussion { border-top: 1px solid var(--border-light); margin-top: 32px; padding-top: 20px; }
 .discussion-heading, .composer-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }

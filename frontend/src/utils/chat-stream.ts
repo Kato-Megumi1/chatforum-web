@@ -4,10 +4,12 @@ import { useUserStore } from '@/stores/user';
 import { readSse } from './sse';
 
 export interface RunResult { status: string; error?: string; result?: { content: string; ragMetadata?: any } }
+export interface GenerationProgress { stage: 'preparing' | 'generating' | 'tools' | 'verifying' | 'completed';
+  elapsedMs: number; firstTokenMs: number | null; stages: Array<{ stage: string; durationMs: number }> }
 class StreamAccessError extends Error {}
 
 export async function watchChatRun(id: string, signal: AbortSignal,
-  onDelta: (text: string) => void): Promise<RunResult> {
+  onDelta: (text: string) => void, onProgress?: (progress: GenerationProgress) => void): Promise<RunResult> {
   let offset = 0, failures = 0;
   while (!signal.aborted) {
     const connection = new AbortController();
@@ -36,6 +38,9 @@ export async function watchChatRun(id: string, signal: AbortSignal,
           if (typeof value.text !== 'string' || value.offset !== offset + value.text.length)
             throw new StreamAccessError('回答流顺序异常，请重新打开对话');
           offset = value.offset; failures = 0; onDelta(value.text);
+        } else if (frame.event === 'progress') {
+          if (['preparing','generating','tools','verifying','completed'].includes(value.stage) &&
+              Number.isFinite(value.elapsedMs) && value.elapsedMs >= 0) onProgress?.(value);
         } else if (frame.event === 'complete' || frame.event === 'terminal') return value;
       }
       throw new Error('SSE disconnected');

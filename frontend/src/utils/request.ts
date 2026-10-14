@@ -41,6 +41,13 @@ http.interceptors.response.use(
       try { error.response.data = JSON.parse(await error.response.data.text()); } catch { /* safe generic error below */ }
     }
 
+    // A rejected password is not an expired protected session. Do not rotate or clear an
+    // unrelated stored login, and do not expose whether the supplied mailbox exists.
+    if (error.response?.status === 401 && originalRequest?.url?.split('?')[0] === '/auth/login') {
+      ElMessage.error('邮箱或密码不正确');
+      return Promise.reject(error);
+    }
+
     if (error.response?.status === 401 && !originalRequest._retry) {
       const userStore = useUserStore();
 

@@ -28,6 +28,9 @@
             @keyup.enter="handleLogin"
           />
         </el-form-item>
+        <div class="recovery-entry">
+          <el-button link type="primary" @click="openRecovery">忘记密码？</el-button>
+        </div>
         <el-form-item>
           <el-button
             type="primary"
@@ -44,21 +47,83 @@
         <router-link to="/register">立即注册</router-link>
       </div>
     </div>
+    <el-dialog v-model="recoveryVisible" title="找回密码" class="recovery-dialog" width="min(460px, calc(100vw - 32px))"
+      :close-on-click-modal="false" :close-on-press-escape="!resetting" :show-close="!resetting" @closed="clearRecoverySecrets">
+      <p class="recovery-intro">通过注册邮箱验证身份，设置新密码后重新登录。</p>
+      <el-form ref="recoveryRef" :model="recovery" :rules="recoveryRules" label-position="top" size="large" :disabled="resetting">
+        <el-form-item label="注册邮箱" prop="email">
+          <el-input v-model="recovery.email" placeholder="请输入注册邮箱" autocomplete="email" maxlength="191" @input="recovery.code = ''" />
+        </el-form-item>
+        <el-form-item label="邮箱验证码" prop="code">
+          <div class="recovery-code-row">
+            <el-input v-model="recovery.code" placeholder="6位验证码" inputmode="numeric" autocomplete="one-time-code" maxlength="6" />
+            <el-button :loading="sendingCode" :disabled="resendSeconds > 0 || resetting" @click="sendRecoveryCode">{{ resendSeconds ? `${resendSeconds}秒后重发` : '获取验证码' }}</el-button>
+          </div>
+        </el-form-item>
+        <el-alert v-if="recoveryNotice" :title="recoveryNotice" type="info" :closable="false" class="recovery-notice" />
+        <el-form-item label="新密码" prop="newPassword">
+          <el-input v-model="recovery.newPassword" type="password" show-password autocomplete="new-password" placeholder="至少6个字符" />
+        </el-form-item>
+        <el-form-item label="确认新密码" prop="confirmPassword">
+          <el-input v-model="recovery.confirmPassword" type="password" show-password autocomplete="new-password" placeholder="再次输入新密码" @keyup.enter="resetRecoveredPassword" />
+        </el-form-item>
+      </el-form>
+      <template #footer><el-button :disabled="resetting" @click="recoveryVisible = false">取消</el-button><el-button type="primary" :loading="resetting" :disabled="sendingCode" @click="resetRecoveredPassword">重置密码</el-button></template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { publicAsset } from '@/utils/api';
-import { reactive, ref } from 'vue';
+import { computed, onBeforeUnmount, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
 import { useUserStore } from '@/stores/user';
+import request from '@/utils/request';
+import { registrationPasswordError } from '@/utils/registration-validation';
 
 const router = useRouter();
 const userStore = useUserStore();
 const formRef = ref<FormInstance>();
 const loading = ref(false);
+const recoveryVisible = ref(false), recoveryRef = ref<FormInstance>();
+const sendingCode = ref(false), resetting = ref(false), recoveryNotice = ref('');
+const recovery = reactive({ email: '', code: '', newPassword: '', confirmPassword: '' });
+const clock = ref(Date.now()), resendAt = ref(0);
+const resendSeconds = computed(() => Math.max(0, Math.ceil((resendAt.value - clock.value) / 1000)));
+const timer = window.setInterval(() => { clock.value = Date.now(); }, 1000);
+onBeforeUnmount(() => { window.clearInterval(timer); clearRecoverySecrets(); });
+const recoveryRules: FormRules = {
+  email: [{ required: true, message: '请输入注册邮箱', trigger: 'blur' }, { type: 'email', message: '请输入正确的邮箱格式', trigger: 'blur' }],
+  code: [{ required: true, message: '请输入邮箱验证码', trigger: 'blur' }, { pattern: /^\d{6}$/, message: '请输入6位邮箱验证码', trigger: 'blur' }],
+  newPassword: [{ validator: (_rule, value, callback) => {
+    const error = registrationPasswordError(value) || (!/\S/u.test(value || '') ? '新密码不能全部为空格' : undefined);
+    callback(error ? new Error(error) : undefined);
+  }, trigger: 'blur' }],
+  confirmPassword: [{ validator: (_rule, value, callback) => callback(value && value === recovery.newPassword ? undefined : new Error('两次输入的新密码不一致')), trigger: 'blur' }],
+};
+function clearRecoverySecrets() { recovery.code = ''; recovery.newPassword = ''; recovery.confirmPassword = ''; recoveryRef.value?.clearValidate(); }
+function openRecovery() { clearRecoverySecrets(); recovery.email = form.email.trim(); recoveryNotice.value = ''; recoveryVisible.value = true; }
+async function sendRecoveryCode() {
+  if (sendingCode.value || resetting.value || resendSeconds.value > 0) return;
+  try {
+    await recoveryRef.value?.validateField('email'); sendingCode.value = true;
+    const result = await request.post<{message:string;retryAfterSeconds:number}>('/auth/password-recovery/code', { email: recovery.email.trim().toLowerCase() });
+    recoveryNotice.value = result.message; clock.value = Date.now(); resendAt.value = clock.value + result.retryAfterSeconds * 1000;
+  } catch { /* The shared API handler displays only server-safe errors; a failure starts no false countdown. */ }
+  finally { sendingCode.value = false; }
+}
+async function resetRecoveredPassword() {
+  if (resetting.value || sendingCode.value) return;
+  try {
+    await recoveryRef.value?.validate(); resetting.value = true;
+    const result = await request.post<{message:string}>('/auth/password-recovery/reset', { ...recovery, email: recovery.email.trim().toLowerCase() });
+    form.email = recovery.email.trim(); form.password = ''; userStore.clearAuth();
+    recoveryVisible.value = false; clearRecoverySecrets(); ElMessage.success(result.message || '密码已重置，请使用新密码登录');
+  } catch { /* Never retain a reset proof outside this open form or auto-login after reset. */ }
+  finally { resetting.value = false; }
+}
 
 const form = reactive({
   email: '',
@@ -151,6 +216,10 @@ const handleLogin = async () => {
     }
   }
 }
+.recovery-entry { display: flex; justify-content: flex-end; margin: -8px 0 16px; }
+.recovery-intro { margin: 0 0 22px; color: #697586; line-height: 1.6; }
+.recovery-code-row { display: flex; gap: 10px; width: 100%; .el-input { min-width: 0; flex: 1; } .el-button { flex: 0 0 auto; margin: 0; } }
+.recovery-notice { margin: -4px 0 18px; }
 @media (max-width: 640px) {
   .login-container { min-height: 100svh; height: auto; padding: 24px 16px 56px; justify-content: center; }
   .login-card { width: min(400px, 100%); padding: 30px 24px; }

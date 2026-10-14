@@ -190,6 +190,8 @@
                 <FileArtifacts v-if="isAssistant" :conversation-id="chatStore.currentConversation!.id" :artifacts="msg.ragMetadata?.fileArtifacts" />
                 </template>
               </div>
+              <GenerationStatus v-if="isAssistant && msg.role === 'assistant'" :pending="msg.pending" :busy="chatStore.isStreaming"
+                :progress="msg.ragMetadata?.performance" :generation="msg.ragMetadata?.generation" @continue="continueAnswer(msg)" />
               <div
                 v-if="msg.content && !msg.pending"
                 class="message-actions"
@@ -258,7 +260,7 @@
       <el-form label-position="top">
         <el-form-item label="对话模型（仅选择，不配置密钥）">
           <el-select v-model="selectedModelId" aria-label="设置中的对话模型" style="width: 100%" :disabled="chatStore.isStreaming">
-            <el-option v-for="model in chatStore.llmConfig.models" :key="model.id" :label="model.label + (model.available ? '' : '（未配置）')"
+            <el-option v-for="model in chatStore.llmConfig.models" :key="model.id" :label="model.label + (model.available ? '' : '（不可用）')"
               :value="model.id" :disabled="!model.available" />
           </el-select>
         </el-form-item>
@@ -316,6 +318,7 @@ import AssistantComposer from '@/components/AssistantComposer.vue';
 import CodeWorkspace from '@/components/CodeWorkspace.vue';
 import FileArtifacts from '@/components/FileArtifacts.vue';
 import MessageAttachments from '@/components/MessageAttachments.vue';
+import GenerationStatus from '@/components/GenerationStatus.vue';
 import { uploadChatFiles, chatFileKey, type ChatFile } from '@/utils/chat-files';
 import { publicAsset, CONNECTION_SETTINGS_ENABLED } from '@/utils/api';
 import { useChatStore } from '@/stores/chat';
@@ -452,8 +455,7 @@ const selectedKnowledgeBaseId = computed({
 });
 
 const selectedModelId = computed({
-  get: () => (chatStore.currentConversation ? chatStore.getConversationSettings(chatStore.currentConversation.id).modelId : '') ||
-    chatStore.preferredModelId || chatStore.llmConfig.defaultModelId,
+  get: () => chatStore.selectedModelId(chatStore.currentConversation?.id),
   set: (modelId: string) => {
     if (chatStore.currentConversation) chatStore.saveConversationSettings(chatStore.currentConversation.id, { modelId });
     else chatStore.preferredModelId = modelId;
@@ -712,6 +714,18 @@ const handleNewChat = async () => {
 };
 
 let sendingLock = false;
+const continueAnswer = async (message: any) => {
+  if (chatStore.isStreaming || !isAssistant.value || inputText.value.trim() || pendingFiles.value.length) {
+    if (!chatStore.isStreaming) ElMessage.info('请先发送或清空当前草稿，再继续生成');
+    return;
+  }
+  const answers = chatStore.messages.filter(m => m.role === 'assistant');
+  if (answers[answers.length - 1]?.id !== message.id) {
+    ElMessage.info('请在输入框说明要续写哪条回答'); return;
+  }
+  inputText.value = '请继续上一条回答，从中断处接着写，不要重复已经输出的内容。';
+  await handleSendMessage();
+};
 const handleSendMessage = async () => {
   if (sendingLock || uploadingFiles.value || chatStore.isStreaming || isLegacy.value) return;
   const text = inputText.value.trim();

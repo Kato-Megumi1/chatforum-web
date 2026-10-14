@@ -30,3 +30,16 @@ test('SSE reconnect still waits for the same task after an hour, with no total t
   const result = await module.watchChatRun('fixture-run', new AbortController().signal, () => {});
   assert.equal(result.status, 'COMPLETED'); assert.equal(calls, 2);
 });
+test('progress frames stay separate from answer text and survive normal completion', async t => {
+  const module = load('chat-stream', {
+    './api': { apiUrl: p => 'http://fixture.invalid' + p }, './request': { default: {} },
+    '@/stores/user': { useUserStore: () => ({ token: 'fixture' }) }, './sse': load('sse'),
+  });
+  const progress = {stage:'verifying',elapsedMs:1700,firstTokenMs:null,stages:[]};
+  t.mock.method(globalThis,'fetch',async()=>new Response(
+    'event: progress\ndata: '+JSON.stringify(progress)+'\n\nevent: delta\ndata: {"text":"回答","offset":2}\n\nevent: complete\ndata: {"status":"COMPLETED","result":{"content":"回答"}}\n\n',
+    {headers:{'content-type':'text/event-stream'}}));
+  const chunks=[],phases=[];
+  const result=await module.watchChatRun('fixture',new AbortController().signal,text=>chunks.push(text),value=>phases.push(value));
+  assert.equal(result.status,'COMPLETED');assert.deepEqual(chunks,['回答']);assert.deepEqual(phases,[progress]);
+});
