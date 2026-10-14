@@ -34,12 +34,22 @@
                   v-model="form.tags"
                   multiple
                   filterable
+                  remote
+                  reserve-keyword
+                  :remote-method="searchTags"
+                  :loading="tagsLoading"
+                  @visible-change="onTagsOpen"
                   allow-create
                   placeholder="选择或创建标签"
                   size="large"
                   style="width: 100%"
                 >
-                  <el-option v-for="tag in tags" :key="tag.id" :label="tag.name" :value="tag.name" />
+                  <el-option v-for="tag in tagOptions" :key="tag.name" :label="tag.name" :value="tag.name" />
+                  <template #footer>
+                    <el-button v-if="tagsError" link @click="loadTags(false)">标签暂未加载，重试</el-button>
+                    <el-button v-else-if="tagsHasMore" link :loading="tagsLoading" @click="loadTags(true)">加载更多标签</el-button>
+                    <span v-else class="tag-options-note">可搜索所有已使用标签，也可输入新标签</span>
+                  </template>
                 </el-select>
               </el-form-item>
             </el-col>
@@ -90,11 +100,14 @@ const draftKey = forumDraftKey(account, editing.value ? String(route.params.id) 
 
 const categories = ref<any[]>([]);
 const tags = ref<any[]>([]);
+const tagsLoading = ref(false), tagsHasMore = ref(false), tagsError = ref(false);
+const tagOptions = computed(() => [...new Map([...form.tags.map(name => ({ name })), ...tags.value].map(tag => [tag.name, tag])).values()]);
+let tagsQuery = '', tagsCursor = '', tagsRequestId = 0;
 const submitting = ref(false);
 const loading = ref(false), preview = ref(false), hasDraft = ref(false), conflict = ref(false), savedLabel = ref('');
 const revision = ref(0);
 const contentFormat = ref<'plain' | 'markdown'>('plain');
-let ready = false, published = false, timer: ReturnType<typeof setTimeout> | undefined, baseline = '';
+let ready = false, published = false, timer: ReturnType<typeof setTimeout> | undefined, baseline = '', observedForm = '';
 
 const form = reactive({
   title: '',
@@ -111,10 +124,17 @@ function saveDraft() {
     hasDraft.value = true; savedLabel.value = '草稿已保存 · ' + new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
   } catch { savedLabel.value = '草稿未保存，请保持页面打开'; }
 }
-watch(form, () => { if (!ready) return; savedLabel.value = '正在保存…'; clearTimeout(timer); timer = setTimeout(saveDraft, 500); }, { deep: true, flush: 'sync' });
+watch(form, () => {
+  if (!ready) return;
+  const current = snapshot();
+  // An async option list can re-emit an equivalent select model; that is not a user edit.
+  if (current === observedForm) return;
+  observedForm = current; savedLabel.value = '正在保存…'; clearTimeout(timer); timer = setTimeout(saveDraft, 500);
+}, { deep: true, flush: 'sync' });
 watch(() => userStore.user?.id, id => {
   if (id === account) return;
   ready = false; published = true; clearTimeout(timer);
+  tagsRequestId++; tags.value = []; tagsLoading.value = false; tagsHasMore.value = false; tagsQuery = ''; tagsCursor = '';
   Object.assign(form, { title: '', categoryId: null, tags: [], content: '' });
   savedLabel.value = ''; hasDraft.value = false;
 });
@@ -137,7 +157,7 @@ async function clearDraft() {
   ready = false;
   if (editing.value) { const original = JSON.parse(baseline); Object.assign(form, { title: original.title, categoryId: original.categoryId, tags: original.tags, content: original.content }); revision.value = original.revision; conflict.value = false; }
   else { Object.assign(form, { title: '', categoryId: null, tags: [], content: '' }); baseline = snapshot(); }
-  ready = true;
+  observedForm = snapshot(); ready = true;
 }
 function goBack() { router.push(editing.value ? '/forum/post/' + route.params.id : '/forum'); }
 function openLatest() { window.open(router.resolve('/forum/post/' + route.params.id).href, '_blank', 'noopener'); }
@@ -153,10 +173,20 @@ const loadCategories = async () => {
   categories.value = (data as any).data || (data as unknown as any[]);
 };
 
-const loadTags = async () => {
-  const data = await request.get('/forum/tags');
-  tags.value = (data as any).data || (data as unknown as any[]);
-};
+async function loadTags(append = false) {
+  if (userStore.user?.id !== account || (append && (tagsLoading.value || !tagsCursor))) return;
+  const stamp = ++tagsRequestId;
+  tagsLoading.value = true; tagsError.value = false;
+  try {
+    const data = await request.get('/forum/tag-options', { params: { q: tagsQuery, limit: 30, ...(append ? { cursor: tagsCursor } : {}) } });
+    if (stamp !== tagsRequestId || userStore.user?.id !== account) return;
+    tags.value = append ? [...tags.value, ...data.data] : data.data;
+    tagsCursor = data.nextCursor || ''; tagsHasMore.value = !!data.hasMore && !!tagsCursor;
+  } catch { if (stamp === tagsRequestId) tagsError.value = true;
+  } finally { if (stamp === tagsRequestId) tagsLoading.value = false; }
+}
+function searchTags(query: string) { tagsQuery = query; tagsCursor = ''; tags.value = []; void loadTags(); }
+function onTagsOpen(visible: boolean) { if (visible && !tags.value.length && !tagsLoading.value) void loadTags(); }
 
 const handleSubmit = async () => {
   if (userStore.user?.id !== account) { ElMessage.warning('登录账号已变化，请重新打开编辑页面'); return; }
@@ -210,9 +240,9 @@ onMounted(async () => {
       contentFormat.value = post.contentFormat === 'markdown' ? 'markdown' : 'plain';
     } catch { published = true; await router.replace('/forum'); return; } finally { loading.value = false; }
   }
-  baseline = snapshot(); restoreDraft(); ready = true;
+  baseline = snapshot(); restoreDraft(); observedForm = snapshot(); ready = true;
 });
-onUnmounted(() => { clearTimeout(timer); saveDraft(); window.removeEventListener('beforeunload', beforeUnload); });
+onUnmounted(() => { tagsRequestId++; clearTimeout(timer); saveDraft(); window.removeEventListener('beforeunload', beforeUnload); });
 </script>
 
 <style lang="scss" scoped>
@@ -247,6 +277,7 @@ onUnmounted(() => { clearTimeout(timer); saveDraft(); window.removeEventListener
 }
 .editor-heading { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 12px; }
 .draft-state { color: var(--text-secondary); font-size: 12px; margin-bottom: 16px; }
+.tag-options-note { font-size: 12px; color: var(--text-secondary); line-height: 1.7; }
 .editor-switch { display: flex; width: 100%; gap: 8px; margin-bottom: 10px; }
 .plain-preview { min-height: 360px; white-space: pre-wrap; overflow-wrap: anywhere; width: 100%; padding: 16px; line-height: 1.9; color: var(--text-primary); border: 1px solid var(--border-light); border-radius: 10px; }
 

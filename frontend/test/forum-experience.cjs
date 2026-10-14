@@ -4,7 +4,7 @@ const mod={exports:{}};
 const code=ts.transpileModule(readFileSync(join(__dirname,'../src/utils/forum-experience.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
 const entries=new Map(); const storage={getItem:key=>entries.get(key)||null,setItem:(key,val)=>entries.set(key,val)};
 new Function('module','exports','sessionStorage',code)(mod,mod.exports,storage);
-const {forumFilters,forumQuery,forumDraftKey,readForumNavigation,saveForumNavigation,notificationTarget}=mod.exports;
+const {forumFilters,forumQuery,forumFilterKey,forumDraftKey,readForumNavigation,saveForumNavigation,notificationTarget}=mod.exports;
 test('forum query round-trips filter state and rejects malformed pagination',()=>{
  const f=forumFilters({category:'7',q:'中文搜索',sort:'popular',period:'today',page:'3',limit:'10'});
  assert.deepEqual(forumFilters(forumQuery(f)),f);
@@ -19,4 +19,17 @@ test('forum navigation and drafts cannot cross accounts',()=>{
 test('notification fallback only creates numeric internal destinations',()=>{
  assert.equal(notificationTarget({postId:3,commentId:11}),'/forum/post/3?comment=11');
  assert.equal(notificationTarget({postId:'javascript:alert(1)'}),null);assert.equal(notificationTarget({actorId:7}),'/user/7');
+});
+test('seek cursors round-trip while filter fingerprints exclude pagination',()=>{
+ const first=forumFilters({q:'中文',limit:'10'}),second=forumFilters({q:'中文',limit:'10',page:'2',cursor:'signed.payload_cursor-2'});
+ assert.deepEqual(forumFilters(forumQuery(second)),second);assert.equal(forumFilterKey(first),forumFilterKey(second));
+ assert.notEqual(forumFilterKey(first),forumFilterKey({...first,tagId:'8'}));
+ assert.equal(forumFilters({cursor:['bad']}).cursor,'');assert.equal(forumFilters({cursor:'a'.repeat(8193)}).cursor,'');
+});
+test('saved feed navigation contains account-isolated cursor history, never post content',()=>{
+ saveForumNavigation(1,'/forum?page=2&cursor=next',740,{filterKey:'filters',cursors:{1:'start',2:'next'},data:[{content:'must not persist'}]});
+ const value=readForumNavigation(1);assert.deepEqual(value.feed,{filterKey:'filters',cursors:{1:'start',2:'next'}});assert.equal(readForumNavigation(2),null);
+ assert(![...entries.values()].some(value=>value.includes('must not persist')));
+ entries.set('chatforum-forum-navigation-v1:1',JSON.stringify({userId:1,path:'/forum',scroll:0,feed:{filterKey:'filters',cursors:{1:{content:'bad'}}}}));
+ assert.equal(readForumNavigation(1).feed,undefined);
 });

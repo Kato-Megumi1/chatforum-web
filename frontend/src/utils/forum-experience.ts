@@ -1,5 +1,5 @@
 export interface ForumFilters {
-  categoryId: string; tagId: string; search: string; sortBy: string; hotPeriod: string; page: number; limit: number;
+  categoryId: string; tagId: string; search: string; sortBy: string; hotPeriod: string; page: number; limit: number; cursor: string;
 }
 const scalar = (v: unknown) => typeof v === 'string' ? v : '';
 export function forumFilters(query: Record<string, unknown>): ForumFilters {
@@ -8,7 +8,8 @@ export function forumFilters(query: Record<string, unknown>): ForumFilters {
     tagId: /^\d+$/.test(scalar(query.tag)) ? scalar(query.tag) : '', search: scalar(query.q).slice(0, 200),
     sortBy: ['createdAt', 'popular', 'likes'].includes(scalar(query.sort)) ? scalar(query.sort) : 'createdAt',
     hotPeriod: ['today', 'week', 'all'].includes(scalar(query.period)) ? scalar(query.period) : 'week',
-    page: positive(query.page, 1, 10000), limit: [10, 20, 50].includes(Number(query.limit)) ? Number(query.limit) : 20 };
+    page: positive(query.page, 1, Number.MAX_SAFE_INTEGER), limit: [10, 20, 50].includes(Number(query.limit)) ? Number(query.limit) : 20,
+    cursor: scalar(query.cursor).length <= 8192 ? scalar(query.cursor) : '' };
 }
 export function forumQuery(filters: ForumFilters) {
   const query: Record<string, string> = {};
@@ -18,18 +19,27 @@ export function forumQuery(filters: ForumFilters) {
   if (filters.sortBy !== 'createdAt') query.sort = filters.sortBy;
   if (filters.sortBy === 'popular') query.period = filters.hotPeriod;
   if (filters.page > 1) query.page = String(filters.page);
+  if (filters.cursor) query.cursor = filters.cursor;
   if (filters.limit !== 20) query.limit = String(filters.limit);
   return query;
 }
 const navigationKey = (userId: number) => 'chatforum-forum-navigation-v1:' + userId;
-export function readForumNavigation(userId: number): { path: string; scroll: number } | null {
+export interface ForumFeedNavigation { filterKey: string; cursors: Record<string, string>; }
+export function forumFilterKey(filters: ForumFilters): string {
+  return JSON.stringify(forumQuery({ ...filters, page: 1, cursor: '' }));
+}
+export function readForumNavigation(userId: number): { path: string; scroll: number; feed?: ForumFeedNavigation } | null {
   try { const value = JSON.parse(sessionStorage.getItem(navigationKey(userId)) || 'null');
     return value?.userId === userId && /^\/forum(?:\?|$)/.test(value.path) && typeof value.scroll === 'number' && Number.isFinite(value.scroll)
-      ? { path: value.path, scroll: Math.max(0, value.scroll) } : null;
+      ? { path: value.path, scroll: Math.max(0, value.scroll),
+        ...(value.feed && typeof value.feed.filterKey === 'string' && value.feed.cursors && typeof value.feed.cursors === 'object' && !Array.isArray(value.feed.cursors)
+          && Object.entries(value.feed.cursors).every(([page, cursor]) => /^[1-9]\d*$/.test(page) && typeof cursor === 'string' && cursor.length <= 8192)
+          ? { feed: { filterKey: value.feed.filterKey, cursors: value.feed.cursors } } : {}) } : null;
   } catch { return null; }
 }
-export function saveForumNavigation(userId: number, path: string, scroll: number) {
-  try { sessionStorage.setItem(navigationKey(userId), JSON.stringify({ userId, path, scroll: Math.max(0, scroll) })); } catch { /* navigation is optional */ }
+export function saveForumNavigation(userId: number, path: string, scroll: number, feed?: ForumFeedNavigation) {
+  try { sessionStorage.setItem(navigationKey(userId), JSON.stringify({ userId, path, scroll: Math.max(0, scroll),
+    ...(feed ? { feed: { filterKey: feed.filterKey, cursors: feed.cursors } } : {}) })); } catch { /* navigation is optional */ }
 }
 export const forumDraftKey = (userId: number, postId?: string) => `chatforum-post-draft-v1:${userId}:${postId || 'new'}`;
 export function notificationTarget(item: any): string | null {

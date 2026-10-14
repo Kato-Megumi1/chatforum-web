@@ -74,12 +74,17 @@
             <el-option label="今日热门" value="today" /><el-option label="本周热门" value="week" /><el-option label="全部热门" value="all" />
           </el-select>
         </div>
-        <div v-if="searchText || categoryId || tagId" class="filter-summary"><span>{{ total }} 条结果</span><el-button link @click="clearFilters">清除筛选</el-button></div>
+        <div v-if="searchText || categoryId || tagId" class="filter-summary"><span>已筛选{{ searchText ? ' · ' + searchText : '' }}</span><el-button link @click="clearFilters">清除筛选</el-button></div>
+        <div v-if="sortBy === 'popular' && updatedAt" class="feed-note hot-updated">更新于 {{ formatUpdatedAt(updatedAt) }}<el-button link @click="refreshFirst">刷新热榜</el-button></div>
+        <div v-if="sortBy !== 'popular'" class="feed-note feed-refresh"><span v-if="updatedAt">列表时间 {{ formatUpdatedAt(updatedAt) }}</span><el-button link @click="refreshFirst">{{ sortBy === 'likes' ? '刷新排序' : '刷新帖子' }}</el-button></div>
+        <p v-if="coverageNote" class="feed-note">{{ coverageNote }}</p>
+        <el-alert v-if="navigationNotice" :title="navigationNotice" type="info" :closable="false" />
+        <el-alert v-if="cursorExpired" title="这份列表快照已失效，请刷新首屏查看最新结果。" type="warning" :closable="false"><el-button link @click="refreshFirst">刷新首屏</el-button></el-alert>
         <el-alert v-if="loadError" title="暂时没能加载帖子，请重试" type="error" :closable="false"><el-button link @click="loadPosts">重新加载</el-button></el-alert>
         <div class="post-list" v-loading="loading">
-          <div v-if="posts.length === 0 && !loading" class="empty-posts">
+          <div v-if="posts.length === 0 && !loading && !loadError && !cursorExpired" class="empty-posts">
             <el-icon :size="48" color="#C9CDD4"><Document /></el-icon>
-            <p>暂无帖子</p>
+            <p>{{ hasMore ? '本页帖子已不可访问，可继续查看下一页' : '暂无帖子' }}</p>
           </div>
           <router-link v-for="post in posts" :key="post.id" :to="'/forum/post/' + post.id" class="post-card" @click="savePosition">
             <div class="post-card-header">
@@ -117,17 +122,11 @@
             <div v-if="post.lastReplyAt" class="last-reply">最近回复 · {{ formatTime(post.lastReplyAt) }}</div>
           </router-link>
         </div>
-        <div class="pagination-wrapper" v-if="total > 0">
-          <el-pagination
-            v-model:current-page="page"
-            v-model:page-size="pageSize"
-            :total="total"
-            :page-sizes="[10, 20, 50]"
-            :pager-count="5"
-            layout="total, sizes, prev, pager, next, jumper"
-            @current-change="changePage"
-            @size-change="applyFilters"
-          />
+        <div class="pagination-wrapper seek-pagination" v-if="posts.length || page > 1 || hasMore">
+          <el-button :disabled="page <= 1 || loading || cursorExpired" @click="previousPage">{{ hasPreviousCursor ? '上一页' : '返回首屏' }}</el-button>
+          <span class="page-label">第 {{ page }} 页</span>
+          <el-button :disabled="!hasMore || loading || cursorExpired" @click="nextPage">下一页</el-button>
+          <el-select v-model="pageSize" aria-label="每页条数" class="page-size" @change="applyFilters"><el-option v-for="size in [10, 20, 50]" :key="size" :label="size + ' 条/页'" :value="size" /></el-select>
         </div>
       </div>
     </div>
@@ -137,7 +136,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import { useRouter, useRoute, onBeforeRouteLeave } from 'vue-router';
-import { forumFilters, forumQuery, readForumNavigation, saveForumNavigation } from '@/utils/forum-experience';
+import { forumFilters, forumQuery, forumFilterKey, readForumNavigation, saveForumNavigation } from '@/utils/forum-experience';
 import request from '@/utils/request';
 import { useUserStore } from '@/stores/user';
 import dayjs from 'dayjs';
@@ -161,17 +160,38 @@ const searchText = ref('');
 const sortBy = ref('createdAt');
 const page = ref(1);
 const pageSize = ref(20);
-const total = ref(0);
+const cursor = ref(''), nextCursor = ref(''), hasMore = ref(false), updatedAt = ref(''), coverageNote = ref('');
+const navigationNotice = ref(''), cursorExpired = ref(false);
 const loading = ref(false);
 const loadError = ref(false), hotPeriod = ref('week'), tagsExpanded = ref(false), container = ref<HTMLElement | null>(null);
 let requestId = 0, restorePosition = false, initialLoad = true;
-const savedNavigation = readForumNavigation(userStore.user?.id || 0);
-function savePosition() { saveForumNavigation(userStore.user?.id || 0, route.fullPath, container.value?.scrollTop || 0); }
-function filters() { return { categoryId: categoryId.value, tagId: tagId.value, search: searchText.value, sortBy: sortBy.value, hotPeriod: hotPeriod.value, page: page.value, limit: pageSize.value }; }
-function applyFilters() { page.value = 1; void navigate(); }
+let savedNavigation = readForumNavigation(userStore.user?.id || 0), cursorHistory: Record<string, string> = {};
+let historyKey = '', likesCountKey = '', likesTotal: number | null = null;
+const hasPreviousCursor = computed(() => sortBy.value === 'likes' || !!cursorHistory[String(page.value - 1)]);
+function savePosition() {
+  if (route.path !== '/forum') return;
+  saveForumNavigation(userStore.user?.id || 0, route.fullPath, container.value?.scrollTop || 0,
+    { filterKey: historyKey, cursors: cursorHistory });
+}
+function filters() { return { categoryId: categoryId.value, tagId: tagId.value, search: searchText.value, sortBy: sortBy.value, hotPeriod: hotPeriod.value, page: page.value, limit: pageSize.value, cursor: cursor.value }; }
+function applyFilters() { page.value = 1; cursor.value = ''; cursorHistory = {}; navigationNotice.value = ''; void navigate(); }
 function setCategory(id: string) { categoryId.value = id; applyFilters(); }
 function clearFilters() { categoryId.value = ''; tagId.value = ''; searchText.value = ''; applyFilters(); }
-function changePage() { void navigate(); }
+function refreshFirst() { cursorHistory = {}; likesCountKey = ''; likesTotal = null; page.value = 1; cursor.value = ''; navigationNotice.value = ''; void navigate(); }
+function previousPage() {
+  if (page.value <= 1) return;
+  navigationNotice.value = '';
+  if (sortBy.value === 'likes') { page.value--; cursor.value = ''; }
+  else if (hasPreviousCursor.value) { page.value--; cursor.value = cursorHistory[String(page.value)]; }
+  else { refreshFirst(); return; }
+  void navigate();
+}
+function nextPage() {
+  if (!hasMore.value) return;
+  navigationNotice.value = '';
+  page.value++; cursor.value = sortBy.value === 'likes' ? '' : nextCursor.value;
+  void navigate();
+}
 async function navigate() {
   restorePosition = false;
   const target = { path: '/forum', query: forumQuery(filters()) };
@@ -185,26 +205,54 @@ const loadPosts = async () => {
   loadError.value = false;
   try {
     const params: any = {
-      page: page.value,
       limit: pageSize.value,
-      sortBy: sortBy.value,
     };
     if (sortBy.value === 'popular') params.hotPeriod = hotPeriod.value;
     if (categoryId.value) params.categoryId = categoryId.value;
     if (tagId.value) params.tagId = tagId.value;
     if (searchText.value) params.search = searchText.value;
 
-    const data = await request.get('/forum/posts', { params });
+    const key = forumFilterKey(filters());
+    historyKey = key;
+    const isLikes = sortBy.value === 'likes';
+    if (isLikes) {
+      params.page = page.value; params.sortBy = 'likes'; params.includeTotal = likesCountKey !== key;
+    } else {
+      params.sort = sortBy.value === 'popular' ? 'hot' : 'latest';
+      if (cursor.value) params.cursor = cursor.value;
+    }
+    const data = await request.get(isLikes ? '/forum/posts' : '/forum/feed', { params });
     if (stamp !== requestId || account !== userStore.user?.id) return;
     posts.value = data.data;
-    total.value = data.total;
-    if (!posts.value.length && page.value > 1 && data.total > 0) { page.value = Math.max(1, Math.ceil(data.total / pageSize.value)); await navigate(); return; }
+    cursorExpired.value = false;
+    if (isLikes) {
+      if (typeof data.total === 'number') { likesTotal = data.total; likesCountKey = key; }
+      hasMore.value = page.value < 100 && posts.value.length === pageSize.value && (likesTotal === null || page.value * pageSize.value < likesTotal);
+      nextCursor.value = ''; updatedAt.value = '';
+      coverageNote.value = '点赞排序随互动变化，仅支持前 100 页；深度浏览请切换“最新”。';
+    } else {
+      hasMore.value = !!data.hasMore && !!data.nextCursor;
+      nextCursor.value = data.nextCursor || '';
+      if (data.pageCursor) { cursor.value = data.pageCursor; cursorHistory[String(page.value)] = data.pageCursor; }
+      updatedAt.value = data.snapshot?.asOf || data.asOf || '';
+      coverageNote.value = data.snapshot?.paging === 'first_page_only'
+        ? '当前热门筛选仅显示首屏；请收紧筛选或切换“最新”继续浏览。'
+        : data.snapshot ? '热榜为前 200 条排序快照，并非全站完整结果。' : '';
+      if (restorePosition && sortBy.value === 'popular' && !data.pageCursor) {
+        navigationNotice.value = '当前热门筛选不保留翻页快照，已重新加载首屏排序。';
+      }
+    }
     await nextTick();
     if (restorePosition && savedNavigation?.path === route.fullPath) container.value?.scrollTo({ top: savedNavigation.scroll });
     else container.value?.scrollTo({ top: 0 });
     restorePosition = false;
     savePosition();
-  } catch { if (stamp === requestId) loadError.value = true;
+  } catch (error: any) {
+    if (stamp === requestId && account === userStore.user?.id) {
+      if (error.response?.status === 409 || (error.response?.status === 400 && cursor.value)) {
+        cursorExpired.value = true; loadError.value = false; hasMore.value = false;
+      } else loadError.value = true;
+    }
   } finally {
     if (stamp === requestId) loading.value = false;
   }
@@ -223,17 +271,32 @@ const loadTags = async () => {
 const formatTime = (time: string) => {
   return dayjs(time).fromNow();
 };
+const formatUpdatedAt = (time: string) => dayjs(time).format('MM-DD HH:mm:ss');
 
 let tagTimer: ReturnType<typeof setInterval> | null = null;
 
-watch(() => route.fullPath, () => {
+watch(() => route.fullPath, async () => {
   if (route.path !== '/forum') return;
   const f = forumFilters(route.query); categoryId.value = f.categoryId; tagId.value = f.tagId; searchText.value = f.search;
-  sortBy.value = f.sortBy; hotPeriod.value = f.hotPeriod; page.value = f.page; pageSize.value = f.limit;
+  sortBy.value = f.sortBy; hotPeriod.value = f.hotPeriod; page.value = f.page; pageSize.value = f.limit; cursor.value = f.cursor;
   restorePosition = initialLoad && savedNavigation?.path === route.fullPath;
+  const key = forumFilterKey(f);
+  if (key !== historyKey) { cursorHistory = restorePosition && savedNavigation?.feed?.filterKey === key ? { ...savedNavigation.feed.cursors } : {}; historyKey = key; }
+  if (restorePosition && !cursor.value) cursor.value = cursorHistory[String(page.value)] || '';
   initialLoad = false;
+  if ((sortBy.value !== 'likes' && page.value > 1 && !cursor.value) || (sortBy.value === 'likes' && page.value > 100)) {
+    navigationNotice.value = sortBy.value === 'likes' ? '旧链接超过点赞排序的 100 页范围，已返回首屏。' : '旧页码链接没有可恢复的游标，已返回首屏。';
+    page.value = 1; cursor.value = ''; cursorHistory = {}; restorePosition = false;
+    await router.replace({ path: '/forum', query: forumQuery(filters()) });
+    return;
+  }
+  cursorExpired.value = false; hasMore.value = false; posts.value = []; coverageNote.value = ''; updatedAt.value = '';
   void loadPosts();
 }, { immediate: true });
+watch(() => userStore.user?.id, () => {
+  requestId++; posts.value = []; cursorHistory = {}; likesCountKey = ''; likesTotal = null;
+  savedNavigation = null; initialLoad = false; historyKey = ''; refreshFirst();
+});
 onBeforeRouteLeave(() => { savePosition(); requestId++; });
 onMounted(() => {
   void loadCategories().catch(() => {});
@@ -515,6 +578,12 @@ onUnmounted(() => {
   justify-content: center;
   margin-top: 28px;
 }
+.seek-pagination { align-items: center; gap: 12px; flex-wrap: wrap; }
+.page-label { font-size: 13px; color: var(--text-secondary); white-space: nowrap; }
+.page-size { width: 112px; }
+.feed-note { margin: 10px 0; font-size: 12px; line-height: 1.7; color: var(--text-secondary); overflow-wrap: anywhere; }
+.hot-updated { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.feed-refresh { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 
 @media (max-width: 900px) {
   .content-toolbar { position: sticky; top: 0; z-index: 3; background: #faf9f7; padding: 10px 0; }
@@ -578,5 +647,8 @@ onUnmounted(() => {
   .post-stats { font-size: 11px; gap: 16px; color: #a69aa2; width: 100%; }
   .stat-time { margin-left: auto; font-size: 10px; }
   .pagination-wrapper { margin-top: 22px; }
+  .seek-pagination { gap: 8px; }
+  .seek-pagination .page-size { width: 100px; }
+  .seek-pagination :deep(.el-button) { margin-left: 0; padding-inline: 11px; }
 }
 </style>
