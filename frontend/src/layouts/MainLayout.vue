@@ -282,7 +282,9 @@ const handleLogout = async () => {
 
 .mobile-tabbar { display: none; }
 @media (max-width: 900px) {
-  .main-layout { background: #faf9f7; padding-top: env(safe-area-inset-top); padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
+  // Browser/WebView chrome already owns the top system inset. Some embedded
+  // browsers still report it through env(), which otherwise adds a second gap.
+  .main-layout { background: #faf9f7; padding-top: 0; padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
   .header { padding: 0 20px; gap: 12px; height: 60px; background: #faf9f7; box-shadow: none; border: 0; }
   .header-menu, .username, .arrow-icon, .btn-register { display: none; }
   .mobile-chat-page > .header { display: none; }
@@ -296,5 +298,8 @@ const handleLogout = async () => {
     min-width: 64px; min-height: 44px; text-decoration: none; color: #91908f; font-size: 10px; font-weight: 500; border-radius: 14px; }
   .mobile-tabbar .el-icon { font-size: 21px; }
   .mobile-tabbar a.active { color: #a55d7a; background: #fcf0f5; }
+}
+@media (max-width: 900px) and (display-mode: standalone), (max-width: 900px) and (display-mode: fullscreen) {
+  .main-layout { padding-top: env(safe-area-inset-top); }
 }
 </style>

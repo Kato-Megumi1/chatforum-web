@@ -2094,4 +2094,9 @@ onMounted(async () => {
   .assistant-main .chat-message.assistant .message-bubble { font-size: 16px; line-height: 1.85; }
   .assistant-footnote { font-size: 12px; margin-top: 8px; }
 }
+@media (max-width: 900px) and (max-height: 600px) {
+  // Keep the composer reachable when a phone keyboard or landscape viewport
+  // leaves little room above it. This depends on viewport size, not focus.
+  .assistant-welcome .welcome-copy, .assistant-welcome .assistant-suggestions { display: none; }
+}
 </style>

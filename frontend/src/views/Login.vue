@@ -28,8 +28,8 @@
             @keyup.enter="handleLogin"
           />
         </el-form-item>
-        <div class="recovery-entry">
-          <el-button link type="primary" @click="openRecovery">忘记密码？</el-button>
+        <div v-if="loginRejected" class="recovery-entry">
+          <button type="button" class="recovery-link" @click="openRecovery">忘记密码？</button>
         </div>
         <el-form-item>
           <el-button
@@ -87,6 +87,7 @@ const router = useRouter();
 const userStore = useUserStore();
 const formRef = ref<FormInstance>();
 const loading = ref(false);
+const loginRejected = ref(false);
 const recoveryVisible = ref(false), recoveryRef = ref<FormInstance>();
 const sendingCode = ref(false), resetting = ref(false), recoveryNotice = ref('');
 const recovery = reactive({ email: '', code: '', newPassword: '', confirmPassword: '' });
@@ -119,7 +120,7 @@ async function resetRecoveredPassword() {
   try {
     await recoveryRef.value?.validate(); resetting.value = true;
     const result = await request.post<{message:string}>('/auth/password-recovery/reset', { ...recovery, email: recovery.email.trim().toLowerCase() });
-    form.email = recovery.email.trim(); form.password = ''; userStore.clearAuth();
+    form.email = recovery.email.trim(); form.password = ''; loginRejected.value = false; userStore.clearAuth();
     recoveryVisible.value = false; clearRecoverySecrets(); ElMessage.success(result.message || '密码已重置，请使用新密码登录');
   } catch { /* Never retain a reset proof outside this open form or auto-login after reset. */ }
   finally { resetting.value = false; }
@@ -139,14 +140,21 @@ const rules: FormRules = {
 };
 
 const handleLogin = async () => {
+  if (loading.value) return;
+  loading.value = true;
+  // A local validation error is not a rejected password attempt.
   try {
     await formRef.value?.validate();
-    loading.value = true;
+  } catch { loading.value = false; return; }
+  try {
     await userStore.login(form.email, form.password);
+    loginRejected.value = false;
     ElMessage.success('登录成功');
     router.replace('/forum');
   } catch (error) {
-    // Error already handled
+    // The shared handler displays the safe login error. Only an actual rejected
+    // login reveals recovery; connection errors and unavailable services do not.
+    if ((error as { response?: { status?: number } })?.response?.status === 401) loginRejected.value = true;
   } finally {
     loading.value = false;
   }
@@ -217,6 +225,12 @@ const handleLogin = async () => {
   }
 }
 .recovery-entry { display: flex; justify-content: flex-end; margin: -8px 0 16px; }
+.recovery-link {
+  appearance: none; border: 0; background: transparent; padding: 8px 0;
+  color: #165dff; font: inherit; font-size: 14px; line-height: 1.4; cursor: pointer;
+  &:hover { text-decoration: underline; }
+  &:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; border-radius: 3px; }
+}
 .recovery-intro { margin: 0 0 22px; color: #697586; line-height: 1.6; }
 .recovery-code-row { display: flex; gap: 10px; width: 100%; .el-input { min-width: 0; flex: 1; } .el-button { flex: 0 0 auto; margin: 0; } }
 .recovery-notice { margin: -4px 0 18px; }
@@ -228,5 +242,6 @@ const handleLogin = async () => {
   .login-card :deep(.el-input__wrapper) { min-height: 46px; border-radius: 12px; }
   .login-card :deep(.el-button--primary) { min-height: 46px; border-radius: 14px; background: #a66b83; border: 0; }
   .login-footer a { color: #a66b83; }
+  .recovery-link { color: #93536f; min-height: 44px; }
 }
 </style>
