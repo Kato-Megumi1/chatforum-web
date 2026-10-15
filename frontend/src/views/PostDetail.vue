@@ -7,17 +7,19 @@
       <div class="eyebrow">COMMUNITY · {{ post.category?.name || '校园交流' }}</div>
       <h1>{{ post.title }}</h1>
       <div class="post-meta">
-        <el-avatar :size="36" :src="post.user.avatar">{{ post.user.username.slice(0, 1) }}</el-avatar>
+        <router-link class="author-link author-avatar-link" :to="'/user/' + post.user.id" :aria-label="'查看 ' + post.user.username + ' 的主页'"><el-avatar :size="36" :src="post.user.avatar">{{ post.user.username.slice(0, 1) }}</el-avatar></router-link>
         <router-link class="author-link" :to="'/user/' + post.user.id"><strong>{{ post.user.username }}</strong></router-link><span>{{ formatTime(post.createdAt) }}</span>
         <span>{{ post.viewCount }} 阅读 · {{ post.commentCount }} 条评论</span>
+        <el-button v-if="post.user.id !== userStore.user?.id" size="small" round :type="post.user.isFollowing ? 'default' : 'primary'" :loading="busy.has('follow')" :aria-label="(post.user.isFollowing ? '取消关注 ' : '关注 ') + post.user.username" @click="toggleAuthor">{{ post.user.isFollowing ? '已关注 · 取消' : '+ 关注作者' }}</el-button>
       </div>
       <div v-if="post.contentFormat === 'markdown'" class="post-content legacy-content" v-html="legacyContent" @click="handleLegacyLink" />
       <div v-else class="post-content">{{ post.content }}</div>
       <div class="tags"><el-tag v-for="pt in post.tags" :key="pt.tag.id" effect="plain" round>{{ pt.tag.name }}</el-tag></div>
       <div class="post-actions">
         <el-button round :type="post.isLiked ? 'primary' : 'default'" :loading="busy.has('like')" @click="togglePost('like')">{{ post.isLiked ? '已点赞' : '点赞' }} {{ post.likeCount }}</el-button>
-        <el-button round :type="post.isFavorited ? 'primary' : 'default'" :loading="busy.has('favorite')" @click="togglePost('favorite')">{{ post.isFavorited ? '已收藏' : '收藏' }}</el-button>
-        <el-button v-if="userStore.user" round :loading="tracking" :disabled="trackedPost === post.id" @click="trackPost">{{ trackedPost === post.id ? '已关注更新' : '关注更新' }}</el-button>
+        <el-button round :type="post.isFavorited ? 'primary' : 'default'" :aria-pressed="!!post.isFavorited" :loading="busy.has('favorite')" @click="togglePost('favorite')"><el-icon><Collection /></el-icon>{{ post.isFavorited ? '已收藏 · 取消' : '收藏帖子' }}</el-button>
+        <router-link v-if="post.isFavorited" class="my-favorites" to="/user/profile?activity=favorites">我的收藏</router-link>
+        <el-button v-if="userStore.user" round :loading="tracking" :disabled="trackedPost === post.id" @click="trackPost">{{ trackedPost === post.id ? '已追踪更新' : '追踪帖子更新' }}</el-button>
         <el-button v-if="post.user.id === userStore.user?.id" round @click="$router.push('/forum/post/' + post.id + '/edit')">编辑帖子</el-button>
       </div>
       <section class="discussion">
@@ -175,11 +177,25 @@ async function locked(key: string, fn: () => Promise<void>) {
 async function togglePost(kind: 'like' | 'favorite') {
   if (!loggedIn()) return;
   const target = post.value, field = kind === 'like' ? 'isLiked' : 'isFavorited';
+  const stamp = generation, account = userStore.user!.id;
   await locked(kind, async () => {
     const url = '/forum/posts/' + target.id + '/' + kind, was = !!target[field];
-    if (was) await request.delete(url); else await request.post(url);
-    target[field] = !was;
+    const result = was ? await request.delete(url) : await request.post(url);
+    if (stamp !== generation || account !== userStore.user?.id || target !== post.value) return;
+    if (kind === 'favorite' && typeof result?.isFavorited !== 'boolean') throw new Error('Missing favorite state');
+    target[field] = kind === 'favorite' ? result.isFavorited : !was;
     if (kind === 'like') target.likeCount = Math.max(0, target.likeCount + (was ? -1 : 1));
+  });
+}
+async function toggleAuthor() {
+  if (!loggedIn() || !post.value || post.value.user.id === userStore.user?.id) return;
+  const target = post.value, stamp = generation, account = userStore.user!.id;
+  await locked('follow', async () => {
+    const url = '/users/' + target.user.id + '/follow';
+    const result = target.user.isFollowing ? await request.delete(url) : await request.post(url);
+    if (stamp !== generation || account !== userStore.user?.id || target !== post.value) return;
+    if (typeof result?.isFollowing !== 'boolean') throw new Error('Missing follow state');
+    target.user.isFollowing = result.isFollowing;
   });
 }
 async function toggleComment(comment: any) {
@@ -261,6 +277,9 @@ h1 { font-size: 27px; line-height: 1.5; margin: 12px 0 18px; overflow-wrap: anyw
 .post-meta, .comment-meta span, .hint, .reply-date { font-size: 12px; color: var(--text-secondary); }
 .post-meta strong, .comment-meta strong { color: var(--text-primary); font-size: 14px; }
 .author-link { color: inherit; text-decoration: none; } .author-link:hover { color: var(--primary-color); }
+.author-avatar-link { display: inline-flex; }
+.my-favorites { font-size: 12px; color: var(--primary-color); text-decoration: none; }
+.post-actions .el-icon { margin-right: 5px; }
 .new-comment { background: #eef7ff; border-radius: 10px; box-shadow: 0 0 0 8px #eef7ff; }
 .post-content { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.95; padding: 28px 0; font-size: 15px; }
 .legacy-content { white-space: normal; }

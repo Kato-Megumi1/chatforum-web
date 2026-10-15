@@ -60,6 +60,12 @@ const routes: RouteRecordRaw[] = [
         meta: { requiresAuth: true },
       },
       {
+        path: 'messages',
+        name: 'DirectMessages',
+        component: () => import('@/views/Messages.vue'),
+        meta: { requiresAuth: true },
+      },
+      {
         path: 'user/profile',
         name: 'UserProfile',
         component: () => import('@/views/UserProfile.vue'),

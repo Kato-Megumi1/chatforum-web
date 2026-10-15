@@ -29,7 +29,7 @@
           </div>
         </div>
         <el-tabs v-model="activeTab" class="profile-tabs">
-          <el-tab-pane label="社区动态" name="community"><ForumActivity /><div class="profile-shortcuts"><el-button plain @click="$router.push('/notifications')">消息通知</el-button><el-button plain @click="$router.push('/forum/create')">发布新帖</el-button></div></el-tab-pane>
+          <el-tab-pane label="社区动态" name="community"><div class="profile-shortcuts social-shortcuts"><router-link to="/user/profile?activity=favorites"><el-icon><Collection /></el-icon>我的收藏</router-link><router-link :to="'/user/' + userStore.user.id + '?people=following'"><el-icon><User /></el-icon>我的关注</router-link><router-link to="/messages"><el-icon><ChatDotRound /></el-icon>私信</router-link></div><ForumActivity /><div class="profile-shortcuts"><el-button plain @click="$router.push('/notifications')">消息通知</el-button><el-button plain @click="$router.push('/forum/create')">发布新帖</el-button></div></el-tab-pane>
           <el-tab-pane label="编辑资料" name="info">
             <el-form :model="profileForm" label-position="top" class="profile-form">
               <el-form-item label="用户名">
@@ -100,8 +100,8 @@
 
 <script setup lang="ts">
 const openConnection = () => window.dispatchEvent(new Event('chatforum:connection-settings'));
-import { apiUrl, normalizeMedia, CONNECTION_SETTINGS_ENABLED } from '@/utils/api';
-import { ref, reactive, onMounted, watch } from 'vue';
+import { CONNECTION_SETTINGS_ENABLED } from '@/utils/api';
+import { ref, reactive, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import ForumActivity from '@/components/ForumActivity.vue';
 import { ElMessage } from 'element-plus';
@@ -111,6 +111,10 @@ import { registrationPasswordError } from '@/utils/registration-validation';
 import type { FormInstance, FormRules } from 'element-plus';
 
 const userStore = useUserStore();
+const isProfileSession = (session: ReturnType<typeof userStore.getAuthSession>) => {
+  const current = userStore.getAuthSession();
+  return current.userId === session.userId && current.epoch === session.epoch;
+};
 
 const route = useRoute();
 const router = useRouter();
@@ -144,16 +148,19 @@ watch(() => passwordForm.newPassword, () => {
 });
 const handleChangePassword = async () => {
   if (!passwordFormRef.value || changingPassword.value) return;
+  const session = userStore.getAuthSession();
   changingPassword.value = true;
   try {
     await passwordFormRef.value.validate();
+    if (!isProfileSession(session)) return;
     await request.post('/auth/password', { ...passwordForm });
+    if (!isProfileSession(session)) return;
     resetPasswordForm(); passwordDialog.value = false;
     userStore.clearAuth();
     ElMessage.success('密码已修改，请使用新密码重新登录');
     await router.replace('/login');
   } catch { /* Form or request displays the precise error; preserve fields for correction. */ }
-  finally { changingPassword.value = false; }
+  finally { if (isProfileSession(session)) changingPassword.value = false; }
 };
 
 const handleAvatarFile = async (e: Event) => {
@@ -174,36 +181,23 @@ const handleAvatarFile = async (e: Event) => {
   const formData = new FormData();
   formData.append('file', file);
 
-  const authToken = userStore.token;
+  const session = userStore.getAuthSession();
+  if (!session.userId) { input.value = ''; return; }
 
   try {
-    const res = await fetch(apiUrl('/users/avatar'), {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${authToken}` },
-      body: formData,
-    });
-    const data = await res.json();
-    if (data.success && data.data?.url) {
-      // Refresh full profile from server to get updated avatar
-      try {
-        const profileRes = await fetch(apiUrl('/users/profile'), {
-          headers: { Authorization: `Bearer ${authToken}` },
-        });
-        const profileData = await profileRes.json();
-        if (profileData.success && profileData.data) {
-          userStore.setUser(normalizeMedia(profileData.data));
-        }
-      } catch {}
-      ElMessage.success('头像更新成功');
-    } else {
-      ElMessage.error(data.message || '上传失败');
-    }
-  } catch {
-    ElMessage.error('头像上传失败');
-  }
-
-  // Reset input so same file can be re-selected
-  input.value = '';
+    // The shared client pins the original identity before Axios schedules a request.
+    // Keep an explicit component boundary too: a stale upload must not start a new-account profile request.
+    const data = await request.post<{ url: string }>('/users/avatar', formData);
+    if (!isProfileSession(session)) return;
+    if (!data?.url) { ElMessage.error('上传未返回头像地址，请重试'); return; }
+    const profileData = await request.get<NonNullable<typeof userStore.user>>('/users/profile');
+    if (!isProfileSession(session)) return;
+    if (!profileData || profileData.id !== session.userId) return;
+    userStore.setUser(profileData);
+    if (!isProfileSession(session)) return;
+    ElMessage.success('头像更新成功');
+  } catch { /* Request errors are displayed once by the shared handler; a stale session stays silent. */ }
+  finally { if (isProfileSession(session)) input.value = ''; }
 };
 
 const profileForm = reactive({
@@ -218,24 +212,27 @@ const handleUpdateProfile = async () => {
     return;
   }
   updating.value = true;
+  const session = userStore.getAuthSession();
   try {
     await userStore.updateProfile({
       username: profileForm.username.trim(),
       bio: profileForm.bio.trim(),
     });
-    ElMessage.success('保存成功');
+    if (isProfileSession(session)) ElMessage.success('保存成功');
   } finally {
-    updating.value = false;
+    if (isProfileSession(session)) updating.value = false;
   }
 };
 
-onMounted(() => {
-  if (userStore.user) {
-    profileForm.username = userStore.user.username;
-    profileForm.email = userStore.user.email;
-    profileForm.bio = userStore.user.bio || '';
-  }
-});
+watch(() => userStore.getAuthSession(), (session, previous) => {
+  if (previous && session.userId === previous.userId && session.epoch === previous.epoch) return;
+  profileForm.username = userStore.user?.username || '';
+  profileForm.email = userStore.user?.email || '';
+  profileForm.bio = userStore.user?.bio || '';
+  passwordDialog.value = false; resetPasswordForm();
+  changingPassword.value = false; updating.value = false;
+  if (avatarInput.value) avatarInput.value.value = '';
+}, { immediate: true, flush: 'sync' });
 </script>
 
 <style lang="scss" scoped>
@@ -244,6 +241,8 @@ onMounted(() => {
   overflow-y: auto;
   background: var(--bg-page);
 }
+.social-shortcuts { display: flex; flex-wrap: wrap; gap: 12px; padding: 6px 0 14px; }
+.social-shortcuts a { display: inline-flex; align-items: center; gap: 6px; padding: 9px 14px; border-radius: 12px; color: var(--primary-dark); background: var(--primary-bg); text-decoration: none; font-size: 13px; }
 
 .profile-wrapper {
   max-width: 800px;

@@ -29,6 +29,7 @@
       </el-menu>
       <div class="header-right">
         <template v-if="userStore.user">
+          <el-badge :value="directMessages.total" :hidden="!directMessages.total" :max="99" class="notification-badge"><el-button class="notification-button" circle text aria-label="社区私信" @click="$router.push('/messages')"><el-icon><Message /></el-icon></el-button></el-badge>
           <el-badge :value="notifications.unreadCount" :hidden="!notifications.unreadCount" :max="99" class="notification-badge"><el-button class="notification-button" circle text aria-label="消息通知" @click="$router.push('/notifications')"><el-icon><Bell /></el-icon></el-button></el-badge>
           <el-dropdown trigger="click">
             <div class="user-info">
@@ -45,6 +46,8 @@
                   个人中心
                 </el-dropdown-item>
                 <el-dropdown-item @click="$router.push('/user/profile?activity=favorites')">我的收藏</el-dropdown-item>
+                <el-dropdown-item @click="$router.push('/user/' + userStore.user.id + '?people=following')">我的关注</el-dropdown-item>
+                <el-dropdown-item @click="$router.push('/messages')">社区私信 {{ directMessages.total ? '(' + directMessages.total + ')' : '' }}</el-dropdown-item>
                 <el-dropdown-item @click="$router.push('/notifications')">消息通知 {{ notifications.unreadCount ? '(' + notifications.unreadCount + ')' : '' }}</el-dropdown-item>
                 <el-dropdown-item divided @click="handleLogout">
                   <el-icon><SwitchButton /></el-icon>
@@ -75,8 +78,9 @@
 <script setup lang="ts">
 import { publicAsset } from '@/utils/api';
 import { computed, watch, onMounted, onUnmounted } from 'vue';
-import { Bell } from '@element-plus/icons-vue';
+import { Bell, Message } from '@element-plus/icons-vue';
 import { useNotificationStore } from '@/stores/notifications';
+import { useDirectMessageStore } from '@/stores/direct-messages';
 import { useRouter, useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useUserStore } from '@/stores/user';
@@ -88,9 +92,10 @@ const router = useRouter();
 const route = useRoute();
 const userStore = useUserStore();
 const notifications = useNotificationStore();
+const directMessages = useDirectMessageStore();
 let notificationTimer: ReturnType<typeof setInterval> | undefined;
-const refreshNotifications = () => { if (!document.hidden) void notifications.refresh(); };
-watch(() => userStore.user?.id, () => { notifications.clear(); if (userStore.user) refreshNotifications(); }, { immediate: true });
+const refreshNotifications = () => { if (!document.hidden) { void notifications.refresh(); void directMessages.refresh(); } };
+watch(() => userStore.user?.id, () => { notifications.clear(); directMessages.clear(); if (userStore.user) refreshNotifications(); }, { immediate: true });
 watch(() => route.path, refreshNotifications);
 onMounted(() => { window.addEventListener('focus', refreshNotifications); notificationTimer = setInterval(refreshNotifications, 60000); });
 onUnmounted(() => { window.removeEventListener('focus', refreshNotifications); clearInterval(notificationTimer); });
@@ -98,7 +103,7 @@ onUnmounted(() => { window.removeEventListener('focus', refreshNotifications); c
 const activeMenu = computed(() => {
   const path = route.path;
   if (path.startsWith('/forum')) return '/forum';
-  if (path.startsWith('/user') || path === '/notifications') return '/user/profile';
+  if (path.startsWith('/user') || path === '/notifications' || path === '/messages') return '/user/profile';
   return path;
 });
 
@@ -107,19 +112,24 @@ const handleSelect = (key: string) => {
 };
 
 const handleLogout = async () => {
+  const session = userStore.getAuthSession();
   try {
     await ElMessageBox.confirm('确定要退出登录吗?', '提示', {
       confirmButtonText: '确定',
       cancelButtonText: '取消',
       type: 'warning',
     });
+    const current = userStore.getAuthSession();
+    if (current.userId !== session.userId || current.epoch !== session.epoch) return;
     await userStore.logout();
+    if (userStore.user || userStore.token) return;
     ElMessage.success('已退出登录');
     router.push('/login');
   } catch (err: any) {
+    if (err?.code === 'AUTH_SESSION_CHANGED' || userStore.user?.id !== session.userId && userStore.user) return;
     if (err !== 'cancel' && err?.message !== 'cancel') {
-      console.error('Logout failed:', err);
-      userStore.clearAuth();
+      // The store only clears the original session; a late logout never signs out a new account.
+      if (userStore.user || userStore.token) return;
       router.push('/login');
     }
   }

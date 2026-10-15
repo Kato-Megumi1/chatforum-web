@@ -93,8 +93,8 @@
             <el-icon :size="48" color="#C9CDD4"><Document /></el-icon>
             <p>{{ hasMore ? '本页帖子已不可访问，可继续查看下一页' : '暂无帖子' }}</p>
           </div>
-          <router-link v-for="post in posts" :key="post.id" :to="'/forum/post/' + post.id" class="post-card" @click="savePosition">
-            <div class="post-card-header">
+          <article v-for="post in posts" :key="post.id" class="post-card" :aria-label="post.title">
+            <router-link :to="'/forum/post/' + post.id" class="post-card-header post-content-link" @click="savePosition">
               <div class="post-badges">
                 <el-tag v-if="post.isTop" type="danger" size="small" effect="dark">置顶</el-tag>
                 <el-tag v-if="post.isEssence" type="warning" size="small" effect="dark">精华</el-tag>
@@ -102,32 +102,36 @@
               </div>
               <h3 class="post-title">{{ post.title }}</h3>
               <p v-if="post.summary" class="post-summary">{{ post.summary }}</p>
-            </div>
+            </router-link>
             <div class="post-card-footer">
               <div class="post-author">
+                <router-link :to="'/user/' + post.user.id" class="author-profile" @click="savePosition" :aria-label="'查看 ' + post.user.username + ' 的主页'">
                 <el-avatar :size="24" :src="post.user.avatar" class="author-avatar">
                   {{ post.user.username.charAt(0).toUpperCase() }}
                 </el-avatar>
                 <span class="author-name">{{ post.user.username }}</span>
+                </router-link>
+                <button v-if="post.user.id !== userStore.user?.id" class="author-follow" :class="{ followed: post.user.isFollowing }" :disabled="followPending.has(post.user.id)" :aria-label="(post.user.isFollowing ? '取消关注 ' : '关注 ') + post.user.username" @click="toggleAuthor(post.user)">{{ followPending.has(post.user.id) ? '处理中' : post.user.isFollowing ? '已关注 · 取消' : '关注' }}</button>
               </div>
               <div class="post-stats">
                 <span class="stat-item">
                   <el-icon><View /></el-icon>
                   {{ post.viewCount }}
                 </span>
-                <span class="stat-item">
+                <router-link :to="'/forum/post/' + post.id" class="stat-item stat-comment" @click="savePosition" :aria-label="post.commentCount + ' 条评论'">
                   <el-icon><ChatDotRound /></el-icon>
                   {{ post.commentCount }}
-                </span>
+                </router-link>
                 <span class="stat-item">
                   <el-icon><Star /></el-icon>
                   {{ post.likeCount }}
                 </span>
+                <button class="bookmark-action" :class="{ saved: post.isFavorited }" :disabled="favoritePending.has(post.id)" :aria-pressed="!!post.isFavorited" :aria-label="(post.isFavorited ? '取消收藏：' : '收藏：') + post.title" @click="toggleFavorite(post)"><el-icon><Collection /></el-icon><span>{{ post.isFavorited ? '已收藏' : '收藏' }}</span></button>
                 <span class="stat-time">{{ formatTime(post.createdAt) }}</span>
               </div>
             </div>
             <div v-if="post.lastReplyAt" class="last-reply">最近回复 · {{ formatTime(post.lastReplyAt) }}</div>
-          </router-link>
+          </article>
         </div>
         <div class="pagination-wrapper seek-pagination" v-if="posts.length || page > 1 || hasMore">
           <el-button :disabled="page <= 1 || loading || cursorExpired" @click="previousPage">{{ hasPreviousCursor ? '上一页' : '返回首屏' }}</el-button>
@@ -159,6 +163,39 @@ const route = useRoute();
 const userStore = useUserStore();
 
 const posts = ref<any[]>([]);
+const favoritePending = reactive(new Set<number>()), followPending = reactive(new Set<number>());
+let socialEpoch = 0;
+function requireAccount() {
+  if (userStore.user) return true;
+  ElMessage.info('登录后即可关注和收藏');
+  void router.push({ path: '/login', query: { redirect: route.fullPath } });
+  return false;
+}
+async function toggleFavorite(post: any) {
+  if (!requireAccount() || favoritePending.has(post.id)) return;
+  const account = userStore.user!.id, stamp = requestId, epoch = socialEpoch;
+  favoritePending.add(post.id);
+  try {
+    const result = post.isFavorited ? await request.delete('/forum/posts/' + post.id + '/favorite') : await request.post('/forum/posts/' + post.id + '/favorite');
+    if (epoch !== socialEpoch || account !== userStore.user?.id || stamp !== requestId || !posts.value.includes(post)) return;
+    if (typeof result?.isFavorited !== 'boolean') throw new Error('Missing favorite state');
+    post.isFavorited = result.isFavorited;
+    ElMessage.success(post.isFavorited ? '已加入我的收藏' : '已取消收藏');
+  } catch { /* shared request error leaves the last confirmed state intact */ }
+  finally { if (epoch === socialEpoch) favoritePending.delete(post.id); }
+}
+async function toggleAuthor(author: any) {
+  if (!requireAccount() || author.id === userStore.user?.id || followPending.has(author.id)) return;
+  const account = userStore.user!.id, stamp = requestId, epoch = socialEpoch;
+  followPending.add(author.id);
+  try {
+    const result = author.isFollowing ? await request.delete('/users/' + author.id + '/follow') : await request.post('/users/' + author.id + '/follow');
+    if (epoch !== socialEpoch || account !== userStore.user?.id || stamp !== requestId) return;
+    if (typeof result?.isFollowing !== 'boolean') throw new Error('Missing follow state');
+    for (const item of posts.value) if (item.user.id === author.id) item.user.isFollowing = result.isFollowing;
+  } catch { /* do not turn an unavailable user or failed request into a successful follow */ }
+  finally { if (epoch === socialEpoch) followPending.delete(author.id); }
+}
 const categories = ref<any[]>([]);
 const tags = ref<any[]>([]);
 const categoryTotal = computed(() => categories.value.reduce((sum, category) => sum + (category._count?.posts || 0), 0));
@@ -340,6 +377,7 @@ watch(() => route.fullPath, async () => {
   void loadPosts();
 }, { immediate: true });
 watch(() => userStore.user?.id, () => {
+  socialEpoch++; favoritePending.clear(); followPending.clear();
   requestId++; posts.value = []; cursorHistory = {}; likesCountKey = ''; likesTotal = null;
   savedNavigation = null; initialLoad = false; historyKey = ''; refreshFirst();
   trackingRequest++; tracking.value = false; trackedScopes.clear();
@@ -539,7 +577,7 @@ onUnmounted(() => {
   background: #fff;
   border-radius: var(--radius-md);
   padding: 20px 24px;
-  cursor: pointer;
+  cursor: default;
   transition: all var(--transition);
   box-shadow: var(--shadow-sm);
   border-left: 3px solid transparent;
@@ -551,6 +589,19 @@ onUnmounted(() => {
     transform: translateX(2px);
   }
 }
+.post-content-link { display: block; color: inherit; text-decoration: none; }
+.post-content-link:hover .post-title { color: var(--primary-color); }
+.author-profile { display: inline-flex; align-items: center; gap: 8px; min-width: 0; color: inherit; text-decoration: none; }
+.author-profile:hover .author-name { color: var(--primary-color); }
+.author-follow, .bookmark-action { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-height: 32px; padding: 4px 8px; border: 0; border-radius: 10px; background: transparent; color: var(--text-secondary); font: inherit; cursor: pointer; }
+.author-follow { font-size: 12px; color: var(--primary-color); background: var(--primary-bg); white-space: nowrap; }
+.author-follow.followed { color: var(--text-secondary); background: #f2f4f7; }
+.bookmark-action.saved { color: var(--primary-color); background: var(--primary-bg); }
+.author-follow:hover, .bookmark-action:hover { filter: brightness(.92); }
+.author-follow:disabled, .bookmark-action:disabled { opacity: .55; cursor: wait; }
+.stat-comment { color: inherit; text-decoration: none; }
+.stat-comment:hover { color: var(--primary-color); }
+.post-content-link:focus-visible, .author-profile:focus-visible, .author-follow:focus-visible, .bookmark-action:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 3px; }
 .post-summary { margin: 8px 0 0; font-size: 13px; line-height: 1.8; color: var(--text-secondary); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
 .post-category { font-size: 11px; color: var(--primary-dark); background: var(--primary-bg); padding: 2px 8px; border-radius: 8px; }
 .last-reply { font-size: 11px; color: var(--text-secondary); margin-top: 12px; }

@@ -1287,7 +1287,21 @@ onMounted(async () => {
 
 .chat-main.persona-theme .assistant .message-bubble {
   border-left: 3px solid #F2BED1;
-  background: #FFFBFC;
+  background: rgba(255, 251, 252, .96);
+}
+
+.chat-main.persona-theme .user .message-bubble {
+  background: linear-gradient(135deg, #f0c3d5, #f5d4df);
+  color: #56384a;
+}
+
+.chat-main.persona-theme .user .message-bubble :deep(.markdown-body),
+.chat-main.persona-theme .user .message-bubble :deep(.markdown-body a) {
+  color: #56384a;
+}
+
+.chat-main.persona-theme .chat-input-area {
+  background: linear-gradient(#fff8f700, #fff8f7d9);
 }
 
 .chat-main.persona-theme .user-avatar-bg {
@@ -1922,6 +1936,32 @@ onMounted(async () => {
   .chat-empty h2 { font-size: 25px; font-weight: 500; color: #393239; }
   .chat-empty p { font-size: 13px; line-height: 1.8; }
   .btn-start { background: #a66b83; border: 0; box-shadow: none; }
+}
+
+/* A plain background avoids a new stacking context: the mobile options sheet
+   must still sit above its sibling backdrop. The supplied pixels stay intact. */
+.chat-main.persona-theme {
+  background-color: #fff8f7;
+  background-image: linear-gradient(90deg, #fff8f7d4, #fff8f7ad), url('@/assets/images/roleplay-megumi-background.jpg');
+  background-position: center, right center;
+  background-size: 100% 100%, auto 100%;
+  background-repeat: no-repeat;
+}
+
+/* No fixed attachment or GPU filters; quiet surfaces protect mobile reading. */
+@media (max-width: 900px) {
+  .chat-main.persona-theme {
+    background-image: linear-gradient(90deg, #fff8f7dc, #fff8f7bd), url('@/assets/images/roleplay-megumi-background.jpg');
+    background-position: center, 68% center;
+  }
+  .chat-main.persona-theme .chat-message.assistant .message-bubble {
+    padding: 12px 14px;
+    border-left: 2px solid #edc2d2;
+    border-radius: 4px 16px 16px 16px;
+    background: rgba(255, 252, 252, .94);
+    box-shadow: 0 2px 8px #71465a08;
+  }
+  .chat-main.persona-theme .chat-input-area { background: linear-gradient(#fff8f700, #fff8f7ed 45%); }
 }
 /* Ordinary AI is a separate presentation layer; roleplay/legacy styling above is unchanged. */
 .assistant-layout { --assistant-canvas: #f5f7fa; --assistant-sidebar: #e9edf3; --assistant-ink: #202733; --assistant-muted: #5d6879; --assistant-line: #cbd4e1; --text-primary: #202733; --text-regular: #394556; --text-secondary: #5d6879; }
