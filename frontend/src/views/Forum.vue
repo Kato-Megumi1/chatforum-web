@@ -111,7 +111,7 @@
                 </el-avatar>
                 <span class="author-name">{{ post.user.username }}</span>
                 </router-link>
-                <button v-if="post.user.id !== userStore.user?.id" class="author-follow" :class="{ followed: post.user.isFollowing }" :disabled="followPending.has(post.user.id)" :aria-label="(post.user.isFollowing ? '取消关注 ' : '关注 ') + post.user.username" @click="toggleAuthor(post.user)">{{ followPending.has(post.user.id) ? '处理中' : post.user.isFollowing ? '已关注 · 取消' : '关注' }}</button>
+                <button v-if="post.user.id !== userStore.user?.id" class="author-follow" :class="{ followed: post.user.isFollowing }" :disabled="followPending.has(post.user.id)" :aria-pressed="!!post.user.isFollowing" :aria-label="(post.user.isFollowing ? '取消关注 ' : '关注 ') + post.user.username" @click="toggleAuthor(post.user)">{{ followPending.has(post.user.id) ? '处理中' : post.user.isFollowing ? '已关注' : '关注' }}</button>
               </div>
               <div class="post-stats">
                 <span class="stat-item">

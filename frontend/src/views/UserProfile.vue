@@ -29,7 +29,13 @@
           </div>
         </div>
         <el-tabs v-model="activeTab" class="profile-tabs">
-          <el-tab-pane label="社区动态" name="community"><div class="profile-shortcuts social-shortcuts"><router-link to="/user/profile?activity=favorites"><el-icon><Collection /></el-icon>我的收藏</router-link><router-link :to="'/user/' + userStore.user.id + '?people=following'"><el-icon><User /></el-icon>我的关注</router-link><router-link to="/messages"><el-icon><ChatDotRound /></el-icon>私信</router-link></div><ForumActivity /><div class="profile-shortcuts"><el-button plain @click="$router.push('/notifications')">消息通知</el-button><el-button plain @click="$router.push('/forum/create')">发布新帖</el-button></div></el-tab-pane>
+          <el-tab-pane label="社区动态" name="community">
+            <ForumActivity />
+            <div class="profile-shortcuts">
+              <el-button plain @click="$router.push('/notifications')">消息通知</el-button>
+              <el-button plain @click="$router.push('/forum/create')">发布新帖</el-button>
+            </div>
+          </el-tab-pane>
           <el-tab-pane label="编辑资料" name="info">
             <el-form :model="profileForm" label-position="top" class="profile-form">
               <el-form-item label="用户名">
@@ -241,9 +247,6 @@ watch(() => userStore.getAuthSession(), (session, previous) => {
   overflow-y: auto;
   background: var(--bg-page);
 }
-.social-shortcuts { display: flex; flex-wrap: wrap; gap: 12px; padding: 6px 0 14px; }
-.social-shortcuts a { display: inline-flex; align-items: center; gap: 6px; padding: 9px 14px; border-radius: 12px; color: var(--primary-dark); background: var(--primary-bg); text-decoration: none; font-size: 13px; }
-
 .profile-wrapper {
   max-width: 800px;
   margin: 0 auto;

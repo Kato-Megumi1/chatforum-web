@@ -152,6 +152,10 @@
           <el-input v-model="customPersonaName" placeholder="角色名称" size="small" class="custom-name" :disabled="chatStore.messages.length > 0" />
           <el-input v-model="customPersonaPrompt" type="textarea" :rows="2" placeholder="自定义系统提示词..." size="small" class="custom-prompt" :disabled="chatStore.messages.length > 0" />
         </div>
+      <div class="dialogue-surface">
+        <div v-if="hasPersonaActive" class="roleplay-wallpaper" aria-hidden="true">
+          <img src="@/assets/images/roleplay-megumi-background.jpg" alt="" draggable="false" />
+        </div>
       <div class="chat-messages" ref="messagesRef" @click="openForumPost">
           <div
             v-for="(msg, idx) in chatStore.messages"
@@ -253,6 +257,7 @@
             </el-button>
           </div>
         </div>
+      </div>
       </div>
     </main>
     <CodeWorkspace v-if="isAssistant && chatStore.currentConversation" v-model="showCode" :conversation-id="chatStore.currentConversation.id" :refresh-key="chatStore.isStreaming || uploadingFiles" @changed="refreshFiles" @attach="attachFiles" />
@@ -1938,22 +1943,56 @@ onMounted(async () => {
   .btn-start { background: #a66b83; border: 0; box-shadow: none; }
 }
 
-/* A plain background avoids a new stacking context: the mobile options sheet
-   must still sit above its sibling backdrop. The supplied pixels stay intact. */
+/* One canvas color, with the artwork below the toolbar rather than behind it.
+   The full dialogue region includes both the messages and the composer.
+   Isolate only the message/composer surface: the mobile options sheet remains
+   outside this stacking context and above its sibling backdrop. */
 .chat-main.persona-theme {
-  background-color: #fff8f7;
-  background-image: linear-gradient(90deg, #fff8f7d4, #fff8f7ad), url('@/assets/images/roleplay-megumi-background.jpg');
-  background-position: center, right center;
-  background-size: 100% 100%, auto 100%;
-  background-repeat: no-repeat;
+  background: #fff8f7;
 }
+
+.dialogue-surface {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.chat-main.persona-theme .dialogue-surface {
+  isolation: isolate;
+}
+
+.roleplay-wallpaper {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: .2;
+  pointer-events: none;
+  user-select: none;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 20px, #000 calc(100% - 20px), transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 20px, #000 calc(100% - 20px), transparent);
+}
+
+.roleplay-wallpaper img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  object-fit: cover;
+  object-position: center;
+  -webkit-mask-image: linear-gradient(transparent, #000 20px, #000 calc(100% - 20px), transparent);
+  mask-image: linear-gradient(transparent, #000 20px, #000 calc(100% - 20px), transparent);
+}
+
+.chat-main.persona-theme .chat-input-area { background: transparent; }
 
 /* No fixed attachment or GPU filters; quiet surfaces protect mobile reading. */
 @media (max-width: 900px) {
-  .chat-main.persona-theme {
-    background-image: linear-gradient(90deg, #fff8f7dc, #fff8f7bd), url('@/assets/images/roleplay-megumi-background.jpg');
-    background-position: center, 68% center;
-  }
+  .roleplay-wallpaper img { object-position: 72% center; }
   .chat-main.persona-theme .chat-message.assistant .message-bubble {
     padding: 12px 14px;
     border-left: 2px solid #edc2d2;
@@ -1961,7 +2000,6 @@ onMounted(async () => {
     background: rgba(255, 252, 252, .94);
     box-shadow: 0 2px 8px #71465a08;
   }
-  .chat-main.persona-theme .chat-input-area { background: linear-gradient(#fff8f700, #fff8f7ed 45%); }
 }
 /* Ordinary AI is a separate presentation layer; roleplay/legacy styling above is unchanged. */
 .assistant-layout { --assistant-canvas: #f5f7fa; --assistant-sidebar: #e9edf3; --assistant-ink: #202733; --assistant-muted: #5d6879; --assistant-line: #cbd4e1; --text-primary: #202733; --text-regular: #394556; --text-secondary: #5d6879; }

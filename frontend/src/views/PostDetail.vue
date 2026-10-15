@@ -10,7 +10,7 @@
         <router-link class="author-link author-avatar-link" :to="'/user/' + post.user.id" :aria-label="'查看 ' + post.user.username + ' 的主页'"><el-avatar :size="36" :src="post.user.avatar">{{ post.user.username.slice(0, 1) }}</el-avatar></router-link>
         <router-link class="author-link" :to="'/user/' + post.user.id"><strong>{{ post.user.username }}</strong></router-link><span>{{ formatTime(post.createdAt) }}</span>
         <span>{{ post.viewCount }} 阅读 · {{ post.commentCount }} 条评论</span>
-        <el-button v-if="post.user.id !== userStore.user?.id" size="small" round :type="post.user.isFollowing ? 'default' : 'primary'" :loading="busy.has('follow')" :aria-label="(post.user.isFollowing ? '取消关注 ' : '关注 ') + post.user.username" @click="toggleAuthor">{{ post.user.isFollowing ? '已关注 · 取消' : '+ 关注作者' }}</el-button>
+        <el-button v-if="post.user.id !== userStore.user?.id" size="small" round :type="post.user.isFollowing ? 'default' : 'primary'" :loading="busy.has('follow')" :aria-pressed="!!post.user.isFollowing" :aria-label="(post.user.isFollowing ? '取消关注 ' : '关注 ') + post.user.username" @click="toggleAuthor">{{ post.user.isFollowing ? '已关注' : '+ 关注作者' }}</el-button>
       </div>
       <div v-if="post.contentFormat === 'markdown'" class="post-content legacy-content" v-html="legacyContent" @click="handleLegacyLink" />
       <div v-else class="post-content">{{ post.content }}</div>

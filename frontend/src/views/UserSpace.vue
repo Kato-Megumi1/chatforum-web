@@ -23,10 +23,11 @@
                 :type="user.isFollowing ? 'default' : 'primary'"
                 round
                 :loading="followPending.has(user.id)"
+                :aria-pressed="!!user.isFollowing"
                 :aria-label="(user.isFollowing ? '取消关注 ' : '关注 ') + user.username"
                 @click="handleFollow(user)"
               >
-                {{ user.isFollowing ? '已关注 · 取消' : '+ 关注' }}
+                {{ user.isFollowing ? '已关注' : '+ 关注' }}
               </el-button>
               <el-button round @click="messageUser(user.id)"><el-icon><ChatDotRound /></el-icon>私信</el-button>
             </div>
@@ -60,7 +61,7 @@
           <el-button v-if="peopleError" @click="loadPeople(false)">重新加载</el-button>
           <article v-for="person in people" :key="person.id" class="person-row">
             <router-link :to="'/user/' + person.id" class="person-profile"><el-avatar :size="44" :src="person.avatar">{{ person.username.slice(0, 1) }}</el-avatar><div><strong>{{ person.username }}</strong><p>{{ person.bio || '去看看 TA 的主页' }}</p></div></router-link>
-            <el-button v-if="person.id !== currentUserId" round size="small" :loading="followPending.has(person.id)" :type="person.isFollowing ? 'default' : 'primary'" :aria-label="(person.isFollowing ? '取消关注 ' : '关注 ') + person.username" @click="handleFollow(person)">{{ person.isFollowing ? '已关注 · 取消' : '+ 关注' }}</el-button>
+            <el-button v-if="person.id !== currentUserId" round size="small" :loading="followPending.has(person.id)" :type="person.isFollowing ? 'default' : 'primary'" :aria-pressed="!!person.isFollowing" :aria-label="(person.isFollowing ? '取消关注 ' : '关注 ') + person.username" @click="handleFollow(person)">{{ person.isFollowing ? '已关注' : '+ 关注' }}</el-button>
           </article>
           <el-button v-if="peopleHasMore" class="load-people" :loading="peopleLoading" @click="loadPeople(true)">加载更多</el-button>
         </section>
