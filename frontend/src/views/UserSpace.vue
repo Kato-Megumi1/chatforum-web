@@ -51,19 +51,21 @@
           </button>
         </div>
         <div v-if="spaceTab === 'posts'" class="public-posts" v-loading="postsLoading">
-          <h2>{{ currentUserId === user.id ? '我的帖子' : 'TA 的帖子' }}</h2><el-empty v-if="!posts.length && !postsLoading" description="还没有公开帖子" :image-size="76" />
+          <h2>{{ currentUserId === user.id ? '我的帖子' : 'TA 的帖子' }}</h2>
+          <el-alert v-if="postsError" title="暂时没能加载帖子，请重试" type="error" :closable="false" show-icon><el-button link @click="loadPosts">重新加载</el-button></el-alert>
+          <el-empty v-if="!posts.length && !postsLoading && !postsError" description="还没有公开帖子" :image-size="76" />
           <router-link v-for="post in posts" :key="post.id" class="public-post" :to="'/forum/post/' + post.id"><strong>{{ post.title }}</strong><p>{{ post.summary }}</p><small>{{ post.category?.name }} · {{ post.commentCount }} 条评论</small></router-link>
-          <el-pagination v-if="total > 10" layout="prev, pager, next" :pager-count="5" :total="total" :page-size="10" v-model:current-page="page" @current-change="loadPosts" />
+          <el-pagination v-if="total > 10" :disabled="postsLoading" layout="prev, pager, next" :pager-count="5" :total="total" :page-size="10" v-model:current-page="page" @current-change="loadPosts" />
         </div>
         <section v-else class="people-section" :aria-label="spaceTab === 'followers' ? '粉丝列表' : '关注列表'" v-loading="peopleLoading">
           <h2>{{ spaceTab === 'followers' ? '粉丝' : '关注的人' }}</h2>
           <el-empty v-if="!people.length && !peopleLoading" :image-size="76" :description="peopleError ? '暂时没能加载，请重试' : spaceTab === 'followers' ? '还没有粉丝' : '还没有关注其他人'" />
-          <el-button v-if="peopleError" @click="loadPeople(false)">重新加载</el-button>
+          <el-button v-if="peopleError" :loading="peopleLoading" @click="loadPeople(peopleRetryAppend)">{{ peopleRetryAppend ? '重试加载更多' : '重新加载' }}</el-button>
           <article v-for="person in people" :key="person.id" class="person-row">
             <router-link :to="'/user/' + person.id" class="person-profile"><el-avatar :size="44" :src="person.avatar">{{ person.username.slice(0, 1) }}</el-avatar><div><strong>{{ person.username }}</strong><p>{{ person.bio || '去看看 TA 的主页' }}</p></div></router-link>
             <el-button v-if="person.id !== currentUserId" round size="small" :loading="followPending.has(person.id)" :type="person.isFollowing ? 'default' : 'primary'" :aria-pressed="!!person.isFollowing" :aria-label="(person.isFollowing ? '取消关注 ' : '关注 ') + person.username" @click="handleFollow(person)">{{ person.isFollowing ? '已关注' : '+ 关注' }}</el-button>
           </article>
-          <el-button v-if="peopleHasMore" class="load-people" :loading="peopleLoading" @click="loadPeople(true)">加载更多</el-button>
+          <el-button v-if="peopleHasMore && !peopleError" class="load-people" :loading="peopleLoading" @click="loadPeople(true)">加载更多</el-button>
         </section>
       </div>
     </div>
@@ -83,9 +85,10 @@ const userStore = useUserStore();
 
 const user = ref<any>(null);
 const currentUserId = computed(() => userStore.user?.id || null);
-const posts = ref<any[]>([]), postsLoading = ref(false), total = ref(0), page = ref(1), profileLoading = ref(false);
+const posts = ref<any[]>([]), postsLoading = ref(false), postsError = ref(false), total = ref(0), page = ref(1), profileLoading = ref(false);
 const spaceTab = computed(() => ['followers', 'following'].includes(String(route.query.people)) ? String(route.query.people) : 'posts');
 const people = ref<any[]>([]), peopleLoading = ref(false), peopleError = ref(false), peopleHasMore = ref(false), peopleCursor = ref<number | null>(null);
+const peopleRetryAppend = ref(false);
 const followPending = reactive(new Set<number>());
 let generation = 0, postRequest = 0, peopleRequest = 0, followEpoch = 0;
 
@@ -98,10 +101,11 @@ const loadUser = async () => {
   finally { if (stamp === generation) profileLoading.value = false; }
 };
 async function loadPosts() {
-  const stamp = ++postRequest, id = route.params.id; postsLoading.value = true;
+  const stamp = ++postRequest, id = route.params.id, account = currentUserId.value; postsLoading.value = true; postsError.value = false;
   try { const data: any = await request.get('/forum/posts', { params: { userId: id, page: page.value, limit: 10 } });
-    if (stamp !== postRequest || id !== route.params.id) return; posts.value = data.data; total.value = data.total;
-  } finally { if (stamp === postRequest) postsLoading.value = false; }
+    if (stamp !== postRequest || id !== route.params.id || account !== currentUserId.value) return; posts.value = data.data; total.value = data.total;
+  } catch { if (stamp === postRequest && id === route.params.id && account === currentUserId.value) postsError.value = true; }
+  finally { if (stamp === postRequest) postsLoading.value = false; }
 }
 
 function requireLogin() {
@@ -132,7 +136,7 @@ const handleFollow = async (target: any) => {
 async function loadPeople(append = false) {
   if (spaceTab.value === 'posts' || (append && peopleLoading.value)) return;
   const stamp = ++peopleRequest, id = route.params.id, tab = spaceTab.value, account = currentUserId.value;
-  peopleLoading.value = true; peopleError.value = false;
+  peopleLoading.value = true; peopleError.value = false; peopleRetryAppend.value = append;
   try {
     const data = await request.get(`/users/${id}/${tab}`, { params: { limit: 20, ...(append && peopleCursor.value ? { cursor: peopleCursor.value } : {}) } });
     if (stamp !== peopleRequest || id !== route.params.id || tab !== spaceTab.value || account !== currentUserId.value) return;
@@ -144,12 +148,12 @@ async function loadPeople(append = false) {
 
 watch(() => [route.params.id, userStore.user?.id], () => {
   followEpoch++; followPending.clear(); peopleRequest++;
-  user.value = null; posts.value = []; page.value = 1;
-  people.value = []; peopleCursor.value = null; peopleHasMore.value = false;
-  void loadUser(); void loadPosts().catch(() => {});
+  user.value = null; posts.value = []; page.value = 1; total.value = 0; postsError.value = false;
+  people.value = []; peopleCursor.value = null; peopleHasMore.value = false; peopleError.value = false; peopleRetryAppend.value = false; peopleLoading.value = false;
+  void loadUser(); void loadPosts();
   if (spaceTab.value !== 'posts') void loadPeople();
 }, { immediate: true });
-watch(() => route.query.people, () => { peopleRequest++; people.value = []; peopleCursor.value = null; peopleHasMore.value = false; if (spaceTab.value !== 'posts') void loadPeople(); });
+watch(() => route.query.people, () => { peopleRequest++; people.value = []; peopleCursor.value = null; peopleHasMore.value = false; peopleError.value = false; peopleRetryAppend.value = false; peopleLoading.value = false; if (spaceTab.value !== 'posts') void loadPeople(); });
 onUnmounted(() => { generation++; postRequest++; peopleRequest++; followEpoch++; });
 </script>
 

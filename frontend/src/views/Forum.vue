@@ -53,19 +53,16 @@
         </div>
       </aside>
       <div class="forum-content">
-        <div class="content-toolbar">
-          <el-input
+        <div class="content-toolbar" :class="{ 'has-mobile-publish': !!userStore.user }">
+          <ForumSearchInput
             v-model="searchText"
-            placeholder="搜索帖子标题或内容..."
-            maxlength="200"
-            prefix-icon="Search"
-            size="large"
+            :account-id="userStore.user?.id"
             class="search-input"
-            @keyup.enter="applyFilters"
-            clearable
+            @submit="applyFilters"
             @clear="applyFilters"
           />
-          <el-radio-group v-model="sortBy" size="default" @change="applyFilters" class="sort-group">
+          <el-button v-if="userStore.user" class="mobile-publish" type="primary" aria-label="发布帖子" @click="$router.push('/forum/create')"><el-icon><Edit /></el-icon></el-button>
+          <el-radio-group v-model="sortBy" size="default" @change="applyFilters" class="sort-group" aria-label="帖子排序">
             <el-radio-button value="createdAt">最新</el-radio-button>
             <el-radio-button value="popular">热门</el-radio-button>
             <el-radio-button value="likes">最多点赞</el-radio-button>
@@ -76,15 +73,18 @@
           <el-select v-if="sortBy === 'popular'" v-model="hotPeriod" class="hot-period" aria-label="热门范围" @change="applyFilters">
             <el-option :label="hotBasis === 'interaction' ? '24 小时互动' : '24 小时发布'" value="today" /><el-option :label="hotBasis === 'interaction' ? '7 日互动' : '7 日发布'" value="week" /><el-option v-if="hotBasis === 'published'" label="全部发布" value="all" />
           </el-select>
+          <el-button class="mobile-filter-button" :class="{ selected: mobileFilterCount > 0 }" :aria-expanded="mobileFiltersOpen" @click="mobileFiltersOpen = true"><el-icon><Filter /></el-icon>筛选<span v-if="mobileFilterCount" class="filter-count">{{ mobileFilterCount }}</span></el-button>
         </div>
-        <div v-if="searchText || categoryId || tagId" class="filter-summary"><span>已筛选{{ searchText ? ' · ' + searchText : '' }}</span><el-button link @click="clearFilters">清除筛选</el-button></div>
-        <div v-if="sortBy === 'popular'" class="feed-note hot-updated"><span v-if="updatedAt">更新于 {{ formatUpdatedAt(updatedAt) }}</span><el-button link @click="refreshFirst">刷新热榜</el-button></div>
-        <div v-if="sortBy !== 'popular'" class="feed-note feed-refresh"><span v-if="updatedAt">列表时间 {{ formatUpdatedAt(updatedAt) }}</span><el-button link @click="refreshFirst">{{ sortBy === 'likes' ? '刷新排序' : '刷新帖子' }}</el-button></div>
-        <p v-if="coverageNote" class="feed-note">{{ coverageNote }}</p>
-        <p v-if="windowCountsNote" class="feed-note">{{ windowCountsNote }}</p>
+        <div v-if="searchText || categoryId || tagId" class="filter-summary"><span class="desktop-filter-label">已筛选{{ searchText ? ' · ' + searchText : '' }}</span><span class="mobile-filter-label">{{ mobileFilterSummary }}</span><el-button link @click="clearFilters">清除筛选</el-button></div>
+        <div class="mobile-feed-meta"><span>{{ mobileFeedLabel }}</span><el-button link :disabled="loading" @click="refreshFirst"><el-icon><Refresh /></el-icon>刷新</el-button></div>
+        <p v-if="mobileCoverageNote" class="mobile-coverage-note">{{ mobileCoverageNote }}</p>
+        <div v-if="sortBy === 'popular'" class="feed-note hot-updated desktop-feed-detail"><span v-if="updatedAt">更新于 {{ formatUpdatedAt(updatedAt) }}</span><el-button link @click="refreshFirst">刷新热榜</el-button></div>
+        <div v-if="sortBy !== 'popular'" class="feed-note feed-refresh desktop-feed-detail"><span v-if="updatedAt">列表时间 {{ formatUpdatedAt(updatedAt) }}</span><el-button link @click="refreshFirst">{{ sortBy === 'likes' ? '刷新排序' : '刷新帖子' }}</el-button></div>
+        <p v-if="coverageNote" class="feed-note desktop-feed-detail">{{ coverageNote }}</p>
+        <p v-if="windowCountsNote" class="feed-note desktop-feed-detail">{{ windowCountsNote }}</p>
         <el-alert v-if="hotStatusNote" :title="hotStatusNote" :type="hotStatus === 'stale' ? 'warning' : 'info'" :closable="false" />
         <el-alert v-if="searchNote" :title="searchNote" type="warning" :closable="false" />
-        <div v-if="userStore.user && sortBy !== 'likes'" class="feed-tracking"><el-button :loading="tracking" :disabled="!canTrack || trackedScopes.has(trackingKey)" @click="trackCurrent">{{ trackedScopes.has(trackingKey) ? '已开启追踪' : sortBy === 'popular' ? '追踪热榜变化' : '追踪新帖' }}</el-button><span>{{ trackingHint }}</span><router-link to="/notifications">管理追踪</router-link></div>
+        <div v-if="userStore.user && sortBy !== 'likes'" class="feed-tracking desktop-feed-detail"><el-button :loading="tracking" :disabled="!canTrack || trackedScopes.has(trackingKey)" @click="trackCurrent">{{ trackedScopes.has(trackingKey) ? '已开启追踪' : sortBy === 'popular' ? '追踪热榜变化' : '追踪新帖' }}</el-button><span>{{ trackingHint }}</span><router-link to="/notifications">管理追踪</router-link></div>
         <el-alert v-if="navigationNotice" :title="navigationNotice" type="info" :closable="false" />
         <el-alert v-if="cursorExpired" title="这份列表快照已失效，请刷新首屏查看最新结果。" type="warning" :closable="false"><el-button link @click="refreshFirst">刷新首屏</el-button></el-alert>
         <el-alert v-if="loadError" title="暂时没能加载帖子，请重试" type="error" :closable="false"><el-button link @click="loadPosts">重新加载</el-button></el-alert>
@@ -112,9 +112,10 @@
                 <span class="author-name">{{ post.user.username }}</span>
                 </router-link>
                 <button v-if="post.user.id !== userStore.user?.id" class="author-follow" :class="{ followed: post.user.isFollowing }" :disabled="followPending.has(post.user.id)" :aria-pressed="!!post.user.isFollowing" :aria-label="(post.user.isFollowing ? '取消关注 ' : '关注 ') + post.user.username" @click="toggleAuthor(post.user)">{{ followPending.has(post.user.id) ? '处理中' : post.user.isFollowing ? '已关注' : '关注' }}</button>
+                <span class="mobile-post-time">{{ formatTime(post.createdAt) }}</span>
               </div>
               <div class="post-stats">
-                <span class="stat-item">
+                <span class="stat-item" :aria-label="'浏览 ' + post.viewCount + ' 次'">
                   <el-icon><View /></el-icon>
                   {{ post.viewCount }}
                 </span>
@@ -122,7 +123,7 @@
                   <el-icon><ChatDotRound /></el-icon>
                   {{ post.commentCount }}
                 </router-link>
-                <span class="stat-item">
+                <span class="stat-item" :aria-label="'获赞 ' + post.likeCount + ' 次'">
                   <el-icon><Star /></el-icon>
                   {{ post.likeCount }}
                 </span>
@@ -141,6 +142,21 @@
         </div>
       </div>
     </div>
+    <el-drawer v-model="mobileFiltersOpen" title="筛选与追踪" direction="btt" size="min(78dvh, 640px)" append-to-body class="mobile-forum-drawer">
+      <div class="mobile-filter-content">
+        <div class="mobile-filter-fields">
+          <label>分类<el-select v-model="categoryId" clearable :value-on-clear="''" placeholder="全部分类" aria-label="筛选分类" @change="applyFilters"><el-option v-for="cat in categories" :key="cat.id" :label="cat.name" :value="String(cat.id)" /></el-select></label>
+          <label>标签<el-select v-model="tagId" clearable :value-on-clear="''" placeholder="全部标签" aria-label="筛选标签" @change="applyFilters"><el-option v-for="tag in tags" :key="tag.id" :label="tag.name" :value="String(tag.id)" /></el-select></label>
+          <template v-if="sortBy === 'popular'">
+            <label>热榜口径<el-select v-model="hotBasis" aria-label="筛选热榜口径" @change="changeHotBasis"><el-option label="近期互动" value="interaction" /><el-option label="发布衰减" value="published" /></el-select></label>
+            <label>时间范围<el-select v-model="hotPeriod" aria-label="筛选热榜范围" @change="applyFilters"><el-option :label="hotBasis === 'interaction' ? '24 小时互动' : '24 小时发布'" value="today" /><el-option :label="hotBasis === 'interaction' ? '7 日互动' : '7 日发布'" value="week" /><el-option v-if="hotBasis === 'published'" label="全部发布" value="all" /></el-select></label>
+          </template>
+        </div>
+        <div class="mobile-filter-notes"><p v-if="coverageNote">{{ coverageNote }}</p><p v-if="windowCountsNote">{{ windowCountsNote }}</p><p v-if="updatedAt">更新于 {{ formatUpdatedAt(updatedAt) }}</p></div>
+        <section v-if="userStore.user && sortBy !== 'likes'" class="mobile-tracking" aria-label="持续追踪设置"><div><strong>持续追踪</strong><router-link to="/notifications" @click="mobileFiltersOpen = false">管理追踪</router-link></div><p>{{ trackingHint }}</p><el-button :loading="tracking" :disabled="!canTrack || trackedScopes.has(trackingKey)" @click="trackCurrent">{{ trackedScopes.has(trackingKey) ? '已开启追踪' : sortBy === 'popular' ? '追踪热榜变化' : '追踪新帖' }}</el-button></section>
+        <div class="mobile-filter-actions"><el-button @click="clearFilters">清除筛选</el-button><el-button type="primary" @click="mobileFiltersOpen = false">查看帖子</el-button></div>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
@@ -151,6 +167,8 @@ import { forumFilters, forumQuery, forumFilterKey, readForumNavigation, saveForu
 import request from '@/utils/request';
 import { useUserStore } from '@/stores/user';
 import { ElMessage } from 'element-plus';
+import { Filter, Refresh } from '@element-plus/icons-vue';
+import ForumSearchInput from '@/components/ForumSearchInput.vue';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import 'dayjs/locale/zh-cn';
@@ -220,6 +238,14 @@ const trackingKey = computed(() => JSON.stringify([sortBy.value, categoryId.valu
 const trackingHint = computed(() => tagId.value ? '标签筛选暂不支持追踪，可改用分类或关键词。' : !canTrack.value ? '追踪需有效的热榜窗口，关键词为空或 2～160 字符。' : '持续检查更新，默认每小时合并站内提醒；可在消息通知中暂停。');
 const loading = ref(false);
 const loadError = ref(false), hotPeriod = ref('week'), tagsExpanded = ref(false), container = ref<HTMLElement | null>(null);
+const mobileFiltersOpen = ref(false);
+const mobileFilterCount = computed(() => Number(!!categoryId.value) + Number(!!tagId.value));
+const mobileFilterSummary = computed(() => [categories.value.find(cat => String(cat.id) === categoryId.value)?.name,
+  tags.value.find(tag => String(tag.id) === tagId.value)?.name, searchText.value.trim()].filter(Boolean).join(' · ') || '已筛选');
+const mobileCoverageNote = computed(() => coverageNote.value.includes('仅显示首屏') ? '当前筛选只提供热榜首屏，可切换“最新”继续浏览。' : sortBy.value === 'likes' ? '点赞排序支持前 100 页，深度浏览请切换“最新”。' : '');
+const mobileFeedLabel = computed(() => sortBy.value === 'popular'
+  ? `${hotBasis.value === 'interaction' ? '近期互动' : '发布衰减'} · ${hotPeriod.value === 'today' ? '24 小时' : hotPeriod.value === 'week' ? '7 日' : '全部历史'}${coverageNote.value && !mobileCoverageNote.value ? ' · Top 200' : ''}`
+  : sortBy.value === 'likes' ? '按点赞数排序' : updatedAt.value ? '更新于 ' + dayjs(updatedAt.value).format('MM-DD HH:mm') : '按发布时间排序');
 let requestId = 0, restorePosition = false, initialLoad = true;
 let savedNavigation = readForumNavigation(userStore.user?.id || 0), cursorHistory: Record<string, string> = {};
 let historyKey = '', likesCountKey = '', likesTotal: number | null = null;
@@ -353,6 +379,8 @@ const formatTime = (time: string) => {
 const formatUpdatedAt = (time: string) => dayjs(time).format('MM-DD HH:mm:ss');
 
 let tagTimer: ReturnType<typeof setInterval> | null = null;
+let mobileMedia: MediaQueryList | null = null;
+const closeDesktopFilters = () => { if (!mobileMedia?.matches) mobileFiltersOpen.value = false; };
 
 watch(() => route.fullPath, async () => {
   if (route.path !== '/forum') return;
@@ -384,6 +412,8 @@ watch(() => userStore.user?.id, () => {
 });
 onBeforeRouteLeave(() => { savePosition(); requestId++; });
 onMounted(() => {
+  mobileMedia = window.matchMedia('(max-width: 900px)');
+  mobileMedia.addEventListener('change', closeDesktopFilters);
   void loadCategories().catch(() => {});
   void loadTags().catch(() => {});
   // 每 5 分钟刷新热门标签
@@ -391,6 +421,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  mobileMedia?.removeEventListener('change', closeDesktopFilters);
   requestId++;
   trackingRequest++;
   if (tagTimer) clearInterval(tagTimer);
@@ -685,6 +716,7 @@ onUnmounted(() => {
 .feed-refresh { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .feed-tracking { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 12px 0; font-size: 12px; color: var(--text-secondary); }
 .feed-tracking a { color: var(--primary-color); }
+.mobile-publish, .mobile-filter-button, .mobile-feed-meta, .mobile-coverage-note, .mobile-filter-label, .mobile-post-time { display: none; }
 
 @media (max-width: 900px) {
   .content-toolbar { position: sticky; top: 0; z-index: 3; background: #faf9f7; padding: 10px 0; }
@@ -751,5 +783,61 @@ onUnmounted(() => {
   .seek-pagination { gap: 8px; }
   .seek-pagination .page-size { width: 100px; }
   .seek-pagination :deep(.el-button) { margin-left: 0; padding-inline: 11px; }
+}
+
+/* Mobile keeps discovery controls close to the feed; the established desktop layout stays above. */
+@media (max-width: 900px) {
+  .forum-hero, .forum-sidebar, .desktop-feed-detail, .desktop-filter-label { display: none; }
+  .forum-main { padding: 0 12px 28px; }
+  .content-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 12px 0 8px; margin-bottom: 0; }
+  .search-input { grid-column: 1 / -1; min-width: 0; width: 100%; }
+  .has-mobile-publish .search-input { grid-column: 1; }
+  .search-input :deep(.el-input__wrapper) { min-height: 42px; }
+  .mobile-publish { display: inline-flex; width: 44px; height: 44px; padding: 0; margin: 0; border-radius: 14px; background: #a66b83; border-color: #a66b83; }
+  .mobile-publish .el-icon { font-size: 19px; }
+  .sort-group { grid-row: 2; grid-column: 1; min-width: 0; flex-wrap: nowrap; }
+  .sort-group :deep(.el-radio-button__inner) { min-height: 40px; padding: 12px 10px; font-size: 12px; }
+  .mobile-filter-button { display: inline-flex; grid-row: 2; grid-column: 2; min-height: 40px; padding: 0 10px; margin: 0; gap: 4px; border: 0; border-radius: 12px; color: #796c75; background: #eee9ec; }
+  .mobile-filter-button.selected { color: #955d76; background: #f3e5ed; }
+  .filter-count { font-size: 11px; margin-left: 4px; }
+  .content-toolbar > .hot-period { display: none; }
+  .mobile-feed-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 36px; margin-bottom: 6px; font-size: 11px; color: #92818c; }
+  .mobile-feed-meta > span { min-width: 0; overflow-wrap: anywhere; }
+  .mobile-feed-meta .el-button { min-height: 36px; padding: 4px 0 4px 10px; color: #8e657a; font-size: 12px; flex-shrink: 0; }
+  .mobile-feed-meta .el-icon { margin-right: 4px; }
+  .mobile-coverage-note { display: block; margin: 0 0 10px; font-size: 11px; color: var(--text-secondary); line-height: 1.6; }
+  .filter-summary { padding: 6px 0 0; gap: 8px; }
+  .mobile-filter-label { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; min-width: 0; flex: 1; }
+  .filter-summary .el-button { min-height: 36px; flex-shrink: 0; }
+  .post-card { padding: 16px; border-radius: 16px; }
+  .post-card-header { margin-bottom: 8px; }
+  .post-title { line-height: 1.6; }
+  .post-summary { margin-top: 6px; line-height: 1.65; }
+  .post-card-footer { gap: 2px; }
+  .post-author { flex-basis: 100%; min-width: 0; gap: 8px; }
+  .author-profile { flex: 1; min-width: 0; gap: 7px; }
+  .author-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .author-follow { min-height: 40px; padding-inline: 8px; flex-shrink: 0; }
+  .mobile-post-time { display: inline; margin-left: auto; font-size: 10px; white-space: nowrap; color: #a69aa2; flex-shrink: 0; }
+  .post-stats { align-items: center; gap: 16px; }
+  .post-stats .stat-item { min-height: 40px; }
+  .post-stats .bookmark-action { margin-left: auto; min-height: 40px; }
+  .post-stats .stat-time { display: none; }
+  .last-reply { margin-top: 4px; }
+  .mobile-filter-content { padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+  .mobile-filter-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px 12px; }
+  .mobile-filter-fields label { display: flex; flex-direction: column; gap: 8px; color: var(--text-regular); font-size: 13px; min-width: 0; }
+  .mobile-filter-fields .el-select { width: 100%; }
+  .mobile-filter-fields :deep(.el-select__wrapper) { min-height: 40px; }
+  .mobile-filter-notes { color: var(--text-secondary); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+  .mobile-filter-notes p { margin: 16px 0 0; }
+  .mobile-tracking { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--border-light); }
+  .mobile-tracking > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 13px; }
+  .mobile-tracking a { color: var(--primary-color); font-size: 12px; text-decoration: none; }
+  .mobile-tracking p { color: var(--text-secondary); font-size: 12px; line-height: 1.7; }
+  .mobile-tracking > .el-button { min-height: 40px; }
+  .mobile-filter-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 24px; }
+  .mobile-filter-actions .el-button { min-height: 42px; margin: 0; }
+  .seek-pagination :deep(.el-button), .seek-pagination :deep(.el-select__wrapper) { min-height: 40px; }
 }
 </style>

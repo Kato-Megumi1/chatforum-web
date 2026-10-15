@@ -325,6 +325,7 @@ import FileArtifacts from '@/components/FileArtifacts.vue';
 import MessageAttachments from '@/components/MessageAttachments.vue';
 import GenerationStatus from '@/components/GenerationStatus.vue';
 import { uploadChatFiles, chatFileKey, type ChatFile } from '@/utils/chat-files';
+import { recoverChatDraft, sameDraftFiles, sameDraftSession } from '@/utils/chat-draft-recovery';
 import { publicAsset, CONNECTION_SETTINGS_ENABLED } from '@/utils/api';
 import { useChatStore } from '@/stores/chat';
 import { useUserStore } from '@/stores/user';
@@ -377,6 +378,18 @@ watch(() => chatStore.currentConversation?.id, (id, previousId) => {
   showCode.value = false;
   if (chatStore.currentConversation) activeSpace.value = chatStore.currentConversation.conversationType || 'LEGACY';
   inputText.value = id ? chatStore.drafts[id] || '' : '';
+}, { flush: 'sync' });
+// Drafts are volatile store state, not navigation storage. A returned chat view
+// must observe recovery from an older view's still-running durable request.
+watch(inputText, value => {
+  const id = chatStore.currentConversation?.id;
+  if (ownsView() && id) chatStore.drafts[id] = value;
+}, { flush: 'sync' });
+watch(() => {
+  const id = chatStore.currentConversation?.id;
+  return id ? chatStore.drafts[id] : undefined;
+}, value => {
+  if (ownsView() && !inputText.value && value) inputText.value = value;
 }, { flush: 'sync' });
 const toggleSharedMemory = async (value: boolean | string | number) => {
   if (!chatStore.currentConversation) return;
@@ -740,17 +753,28 @@ const handleSendMessage = async () => {
     ElMessage.warning(knowledgeError.value || selectedKnowledgeIssue.value); return;
   }
 
+  const sendingSession = userStore.getAuthSession();
+  const ownsSendingSession = () => sameDraftSession(sendingSession, userStore.getAuthSession(), chatStore.navigation.userId);
   sendingLock = true;
-  try { if (!chatStore.currentConversation && isAssistant.value) await ensureAssistantConversation(); }
-  catch (e: any) { sendingLock = false; ElMessage.error(e.message || '创建会话失败'); return; }
+  try {
+    if (!chatStore.currentConversation && isAssistant.value) await ensureAssistantConversation();
+    if (!ownsSendingSession() || !ownsView()) throw new Error('登录状态或页面已切换，请重新发送');
+  }
+  catch (e: any) { sendingLock = false; if (ownsSendingSession() && ownsView()) ElMessage.error(e.message || '创建会话失败'); return; }
   inputText.value = '';
   const sendingConversationId = chatStore.currentConversation?.id;
   const sendingFiles=isAssistant.value?[...pendingFiles.value]:[];
   const restoreDraft=()=>{
-    if(!ownsView()||!sendingConversationId)return;
-    chatStore.drafts[sendingConversationId]=text;
-    chatStore.draftAttachments[sendingConversationId]=sendingFiles;
-    if(sendingConversationId===chatStore.currentConversation?.id)inputText.value=text;
+    if(!sendingConversationId)return;
+    const recovered = recoverChatDraft({ expectedSession: sendingSession, currentSession: userStore.getAuthSession(),
+      navigationUserId: chatStore.navigation.userId,
+      conversationExists: chatStore.conversations.some(c => c.id === sendingConversationId && c.userId === sendingSession.userId),
+      current: { text: chatStore.drafts[sendingConversationId] || '', files: chatStore.draftAttachments[sendingConversationId] || [] },
+      failed: { text, files: sendingFiles } });
+    if (!recovered) return;
+    chatStore.drafts[sendingConversationId]=recovered.text;
+    chatStore.draftAttachments[sendingConversationId]=recovered.files;
+    if(ownsView()&&sendingConversationId===chatStore.currentConversation?.id&&!inputText.value)inputText.value=recovered.text;
   };
   try {
     const persona = hasPersonaActive.value ? selectedPersona.value : undefined;
@@ -766,11 +790,14 @@ const handleSendMessage = async () => {
     ];
     const kbId = selectedKnowledgeBaseId.value > 0 ? selectedKnowledgeBaseId.value : undefined;
     const completed=await chatStore.sendConfigured(text, agentMode.value === 'agent' ? 'agent' : 'normal', skills, persona, systemPrompt, kbId,undefined,undefined,
-      {files:sendingFiles,onAccepted:()=>{if(ownsView()&&sendingConversationId)chatStore.draftAttachments[sendingConversationId]=[];}});
+      {files:sendingFiles,onAccepted:()=>{
+        if(ownsSendingSession()&&sendingConversationId&&sameDraftFiles(chatStore.draftAttachments[sendingConversationId]||[],sendingFiles))
+          chatStore.draftAttachments[sendingConversationId]=[];
+      }});
     if(!completed)restoreDraft();
   } catch (e: any) {
     restoreDraft();
-    ElMessage.error(e.message || '发送失败');
+    if (ownsSendingSession() && ownsView()) ElMessage.error(e.message || '发送失败');
   } finally {
     sendingLock = false;
   }

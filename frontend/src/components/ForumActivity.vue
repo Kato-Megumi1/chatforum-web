@@ -12,8 +12,9 @@
       </div>
       <router-link to="/messages" class="activity-pill activity-messages"><el-icon aria-hidden="true"><ChatDotRound /></el-icon>私信</router-link>
     </nav>
-    <div id="activity-panel" v-loading="loading" class="activity-list" role="tabpanel" :aria-labelledby="'activity-tab-' + active">
-      <el-empty v-if="!items.length && !loading" :description="emptyText" :image-size="76" />
+    <div id="activity-panel" v-loading="loading" class="activity-list" role="tabpanel" tabindex="0" :aria-busy="loading" :aria-labelledby="'activity-tab-' + active">
+      <el-alert v-if="loadError" title="暂时没能加载社区内容，请重试" type="error" :closable="false" show-icon><el-button link @click="load">重新加载</el-button></el-alert>
+      <el-empty v-if="!items.length && !loading && !loadError" :description="emptyText" :image-size="76" />
       <template v-for="item in items" :key="item.id">
         <router-link v-if="active === 'following'" class="activity-item follow-item" :to="'/user/' + item.id"><el-avatar :src="item.avatar" :size="38">{{ item.username.slice(0, 1) }}</el-avatar><div><strong>{{ item.username }}</strong><p>{{ item.bio || '去看看 TA 的主页' }}</p></div></router-link>
         <router-link v-else-if="active === 'replies' && item.post?.status === 'APPROVED'" class="activity-item" :to="'/forum/post/' + item.post.id + '?comment=' + item.id"><strong>{{ item.post.title }}</strong><p class="reply-content">{{ item.content }}</p><small>{{ date(item.createdAt) }} · 查看这条回复</small></router-link>
@@ -21,7 +22,7 @@
         <router-link v-else class="activity-item" :to="'/forum/post/' + item.id"><strong>{{ item.title }}</strong><p>{{ item.summary }}</p><small>{{ item.category?.name }} · {{ date(item.createdAt) }} · {{ item.commentCount }} 条评论<span v-if="item.status && item.status !== 'APPROVED'"> · {{ item.status === 'PENDING' ? '审核中' : '暂未公开' }}</span></small></router-link>
       </template>
     </div>
-    <el-pagination v-if="total > 10" layout="prev, pager, next" :page-size="10" :total="total" :pager-count="5" v-model:current-page="page" @current-change="load" />
+    <el-pagination v-if="total > 10" :disabled="loading" layout="prev, pager, next" :page-size="10" :total="total" :pager-count="5" v-model:current-page="page" @current-change="load" />
   </section>
 </template>
 <script setup lang="ts">
@@ -32,7 +33,7 @@ import { ChatDotRound, Collection, Document, User } from '@element-plus/icons-vu
 import request from '@/utils/request';
 import dayjs from 'dayjs';
 const route = useRoute(), router = useRouter(), user = useUserStore();
-const active = ref('posts'), page = ref(1), total = ref(0), items = ref<any[]>([]), loading = ref(false);
+const active = ref('posts'), page = ref(1), total = ref(0), items = ref<any[]>([]), loading = ref(false), loadError = ref(false);
 const activityTabs = [
   { key: 'posts', label: '我的帖子', icon: Document },
   { key: 'replies', label: '我的回复', icon: ChatDotRound },
@@ -43,10 +44,13 @@ let generation = 0;
 const date = (time: string) => dayjs(time).format('YYYY-MM-DD');
 const emptyText = computed(() => ({ posts: '还没有发布帖子', replies: '还没有参与讨论', favorites: '遇到喜欢的帖子，可以收藏在这里', following: '关注感兴趣的社区成员' }[active.value] || '暂无内容'));
 async function load() {
-  const stamp = ++generation, account = user.user?.id; loading.value = true;
+  const stamp = ++generation, account = user.user?.id;
+  if (!account) return;
+  loading.value = true; loadError.value = false;
   try { const data: any = await request.get('/forum/me/' + active.value, { params: { page: page.value, limit: 10 } });
     if (stamp !== generation || account !== user.user?.id) return; items.value = data.data; total.value = data.total;
-  } finally { if (stamp === generation) loading.value = false; }
+  } catch { if (stamp === generation && account === user.user?.id) loadError.value = true; }
+  finally { if (stamp === generation) loading.value = false; }
 }
 function changeTab(key: string) {
   if (active.value === key) return;
@@ -65,7 +69,11 @@ function handleTabKeydown(event: KeyboardEvent, index: number) {
   const tabs = (event.currentTarget as HTMLElement).parentElement;
   tabs?.querySelector<HTMLButtonElement>('[data-activity="' + activityTabs[target].key + '"]')?.focus();
 }
-watch(() => [route.query.activity, user.user?.id], () => { active.value = ['posts', 'replies', 'favorites', 'following'].includes(String(route.query.activity)) ? String(route.query.activity) : 'posts'; page.value = 1; items.value = []; if (user.user) void load().catch(() => {}); }, { immediate: true });
+watch(() => [route.query.activity, user.user?.id], () => {
+  generation++; active.value = ['posts', 'replies', 'favorites', 'following'].includes(String(route.query.activity)) ? String(route.query.activity) : 'posts';
+  page.value = 1; total.value = 0; items.value = []; loading.value = false; loadError.value = false;
+  if (user.user) void load();
+}, { immediate: true });
 onUnmounted(() => { generation++; });
 </script>
 <style scoped lang="scss">

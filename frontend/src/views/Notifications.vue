@@ -2,17 +2,23 @@
   <div class="notifications-page"><div class="notifications-wrapper">
     <el-page-header @back="$router.push('/forum')" title="返回社区" />
     <section class="notification-card">
-      <div class="heading"><div><h1>消息通知</h1><p>{{ notifications.unreadCount }} 条未读</p></div><el-button :disabled="!notifications.unreadCount" :loading="markingAll" @click="readAll">全部已读</el-button></div>
-      <el-radio-group v-model="unreadOnly" @change="page = 1; load()"><el-radio-button :value="false">全部</el-radio-button><el-radio-button :value="true">未读</el-radio-button></el-radio-group>
-      <div v-loading="loading" class="notification-list">
-        <el-empty v-if="!items.length && !loading" description="暂时没有新消息" />
+      <div class="heading"><div><h1>消息通知</h1><p>所有消息 · {{ notifications.unreadCount }} 条未读</p></div><el-button :disabled="!notifications.unreadCount" :loading="markingAll" @click="readAll">全部已读</el-button></div>
+      <div class="notification-filters">
+        <nav class="notification-types" aria-label="消息分类">
+          <button v-for="item in notificationTypes" :key="item.value" :class="{ active: notificationType === item.value }" :aria-pressed="notificationType === item.value" @click="setType(item.value)">{{ item.label }}</button>
+        </nav>
+        <el-radio-group v-model="unreadOnly" @change="resetList"><el-radio-button :value="false">全部</el-radio-button><el-radio-button :value="true">未读</el-radio-button></el-radio-group>
+      </div>
+      <div v-loading="loading" class="notification-list" :aria-busy="loading">
+        <el-alert v-if="loadError" title="暂时没能加载消息通知，请重试" type="error" :closable="false" show-icon><el-button link @click="load">重新加载</el-button></el-alert>
+        <el-empty v-if="!items.length && !loading && !loadError" description="暂时没有新消息" />
         <article v-for="item in items" :key="item.id" class="notification-item" :class="{ unread: !item.isRead }">
           <div class="notification-dot"></div><div class="notification-body"><div class="notification-meta"><strong>{{ item.title }}</strong><span>{{ formatTime(item.createdAt) }}</span></div><p>{{ item.content }}</p>
-            <div class="notification-actions"><el-button v-if="target(item)" link type="primary" @click="open(item)">查看详情</el-button><el-button v-if="!item.isRead" link :disabled="busy.has(item.id)" @click="read(item)">标记已读</el-button><span v-else>已读</span></div>
+            <div class="notification-actions"><el-button v-if="target(item)" link type="primary" :disabled="busy.has(item.id)" @click="open(item)">查看详情</el-button><el-button v-if="!item.isRead" link :disabled="busy.has(item.id)" @click="read(item)">标记已读</el-button><span v-else>已读</span></div>
           </div>
         </article>
       </div>
-      <el-pagination v-if="total > 20" layout="prev, pager, next" :pager-count="5" :page-size="20" :total="total" v-model:current-page="page" @current-change="load" />
+      <el-pagination v-if="total > 20" :disabled="loading" layout="prev, pager, next" :pager-count="5" :page-size="20" :total="total" v-model:current-page="page" @current-change="load" />
     </section>
     <section class="notification-card subscription-card">
       <div class="heading"><div><h2>持续追踪</h2><p>后台检查更新并合并站内提醒，不需要保持页面打开。</p></div><el-button :loading="subscriptionsLoading" :disabled="subscriptionBusy.size > 0" @click="loadSubscriptions">刷新追踪</el-button></div>
@@ -38,8 +44,16 @@ import { notificationTarget } from '@/utils/forum-experience';
 import dayjs from 'dayjs';
 import { ElMessageBox } from 'element-plus';
 const router = useRouter(), notifications = useNotificationStore(), user = useUserStore();
-const items = ref<any[]>([]), page = ref(1), total = ref(0), unreadOnly = ref(false), loading = ref(false), markingAll = ref(false);
-const busy = reactive(new Set<number>()); let generation = 0, markAllRequest = 0;
+const items = ref<any[]>([]), page = ref(1), total = ref(0), unreadOnly = ref(false), loading = ref(false), loadError = ref(false), markingAll = ref(false);
+const notificationType = ref('');
+const notificationTypes = [{ value: '', label: '全部消息' }, { value: 'COMMENT', label: '评论与回复' },
+  { value: 'LIKE', label: '收到的赞' }, { value: 'FOLLOW', label: '新增关注' }, { value: 'SYSTEM', label: '系统与追踪' }];
+function resetList() { page.value = 1; items.value = []; total.value = 0; void load(); }
+function setType(value: string) {
+  if (!notificationTypes.some(item => item.value === value) || value === notificationType.value) return;
+  notificationType.value = value; resetList();
+}
+const busy = reactive(new Set<number>()); let generation = 0, markAllRequest = 0, identityGeneration = 0;
 const subscriptions = ref<any[]>([]), subscriptionsLoading = ref(false), subscriptionsError = ref(false);
 const subscriptionBusy = reactive(new Set<number>()); let subscriptionGeneration = 0;
 const watchLabels: Record<string, string> = { NEW_POSTS: '新帖追踪', POST_ACTIVITY: '帖子更新', HOT_RISE: '热榜变化' };
@@ -90,35 +104,54 @@ async function removeWatch(item: any) {
 const formatTime = (time: string) => dayjs(time).format('MM-DD HH:mm');
 function target(item: any) { return typeof item.url === 'string' && /^\/(?:forum\/post\/\d+(?:\?comment=\d+)?|user\/\d+)$/.test(item.url) ? item.url : item.url === null ? null : notificationTarget(item); }
 async function load() {
-  const stamp = ++generation, account = user.user?.id; loading.value = true;
-  try { const data: any = await request.get('/forum/notifications', { params: { page: page.value, limit: 20, unreadOnly: unreadOnly.value } });
+  const stamp = ++generation, account = user.user?.id;
+  if (!account) return;
+  loading.value = true; loadError.value = false;
+  try { const data: any = await request.get('/forum/notifications', { params: { page: page.value, limit: 20, unreadOnly: unreadOnly.value,
+    ...(notificationType.value ? { type: notificationType.value } : {}) } });
     if (stamp !== generation || account !== user.user?.id) return;
     items.value = data.data; total.value = data.total; notifications.unreadCount = data.unreadCount;
-  } catch { /* request errors use the shared handler */ } finally { if (stamp === generation) loading.value = false; }
+  } catch { if (stamp === generation && account === user.user?.id) loadError.value = true; }
+  finally { if (stamp === generation) loading.value = false; }
 }
 async function read(item: any) {
   if (item.isRead || busy.has(item.id)) return; busy.add(item.id);
-  const account = user.user?.id, stamp = generation;
+  const account = user.user?.id, stamp = generation, action = identityGeneration;
   try { await request.put('/forum/notifications/' + item.id + '/read');
     if (stamp !== generation || account !== user.user?.id) return;
     item.isRead = true;
     if (unreadOnly.value) { items.value = items.value.filter(i => i.id !== item.id); total.value = Math.max(0, total.value - 1); }
-    await notifications.refresh(); }
-  finally { busy.delete(item.id); }
+    const emptyLastPage = unreadOnly.value && !items.value.length && page.value > 1;
+    // A badge refresh is auxiliary; it must not strand the list on an empty page.
+    try { await notifications.refresh(); } catch { /* retain the current badge until its next refresh */ }
+    if (emptyLastPage && stamp === generation && account === user.user?.id) { page.value--; await load(); }
+  } catch { /* The shared handler reports the failure; keep the last confirmed read state. */ }
+  finally { if (action === identityGeneration && account === user.user?.id) busy.delete(item.id); }
 }
-async function open(item: any) { const url = target(item), account = user.user?.id; if (!url) return; await read(item); if (account === user.user?.id) router.push(url); }
+async function open(item: any) {
+  const url = target(item), account = user.user?.id, action = identityGeneration;
+  if (!url || busy.has(item.id)) return;
+  await read(item);
+  // Marking a notification is best effort and must not prevent opening an accessible destination.
+  if (action === identityGeneration && account === user.user?.id) void router.push(url);
+}
 async function readAll() {
   if (markingAll.value) return; markingAll.value = true;
   const account = user.user?.id, stamp = generation, action = ++markAllRequest;
-  try { await request.put('/forum/notifications/read-all'); if (account !== user.user?.id || stamp !== generation) return; await notifications.refresh(); await load(); }
+  try { await request.put('/forum/notifications/read-all'); if (account !== user.user?.id || stamp !== generation) return;
+    try { await notifications.refresh(); } catch { /* the list still needs to reflect the confirmed operation */ }
+    if (account !== user.user?.id || stamp !== generation) return;
+    if (unreadOnly.value) page.value = 1;
+    await load(); }
+  catch { /* A failed request is not a successful mark-all operation. */ }
   finally { if (action === markAllRequest && account === user.user?.id) markingAll.value = false; }
 }
 watch(() => user.user?.id, () => {
-  generation++; subscriptionGeneration++; markAllRequest++; items.value = []; subscriptions.value = []; page.value = 1;
-  subscriptionBusy.clear(); busy.clear(); markingAll.value = false; subscriptionsLoading.value = false; subscriptionsError.value = false;
+  generation++; subscriptionGeneration++; markAllRequest++; identityGeneration++; items.value = []; subscriptions.value = []; page.value = 1; total.value = 0; notificationType.value = ''; unreadOnly.value = false;
+  subscriptionBusy.clear(); busy.clear(); markingAll.value = false; loading.value = false; loadError.value = false; subscriptionsLoading.value = false; subscriptionsError.value = false;
   if (user.user) { void load(); void loadSubscriptions(); }
 }, { immediate: true });
-onUnmounted(() => { generation++; subscriptionGeneration++; markAllRequest++; });
+onUnmounted(() => { generation++; subscriptionGeneration++; markAllRequest++; identityGeneration++; });
 </script>
 <style scoped lang="scss">
 .notifications-page { height: 100%; overflow-y: auto; background: var(--bg-page); }
@@ -133,6 +166,11 @@ h2 { margin: 0; font-size: 20px; }
 .subscription-scope span, .subscription-note { font-size: 12px; color: var(--text-secondary); line-height: 1.7; }
 .subscription-actions { display: flex; gap: 8px; }.subscription-actions .el-button { margin-left: 0; }
 .notification-list { margin-top: 20px; min-height: 160px; }
+.notification-filters { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.notification-types { display: flex; align-items: center; gap: 6px; max-width: 100%; overflow-x: auto; padding-bottom: 3px; }
+.notification-types button { flex-shrink: 0; border: 0; border-radius: 12px; background: #f2f5fa; color: #53657d; padding: 0 12px; min-height: 44px; font: inherit; font-size: 13px; cursor: pointer; }
+.notification-types button.active { background: #e4f2ff; color: #176caa; font-weight: 600; }
+.notification-types button:focus-visible { outline: 2px solid #409eff; outline-offset: -2px; }
 .notification-item { display: flex; gap: 12px; padding: 22px 0; border-bottom: 1px solid var(--border-light); }
 .notification-dot { flex-shrink: 0; width: 7px; height: 7px; margin-top: 6px; border-radius: 50%; background: transparent; }
 .unread .notification-dot { background: var(--primary-color); } .notification-body { min-width: 0; flex: 1; }
