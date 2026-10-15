@@ -12,24 +12,17 @@
     <div class="composer-bottom">
       <div class="composer-tools">
         <el-popover v-model:visible="uploadMenu" placement="top-start" :width="180" trigger="click">
-          <template #reference><button class="add-file" aria-label="添加文件" :disabled="busy || uploading"><el-icon><Plus /></el-icon></button></template>
-          <button class="upload-file-menu" :disabled="busy || uploading" @click="openPicker"><el-icon><Upload /></el-icon>{{ uploading ? '正在上传…' : '上传文件' }}</button>
+          <template #reference><button class="add-file" aria-label="添加文件" :disabled="busy || uploading || removing"><el-icon><Plus /></el-icon></button></template>
+          <button class="upload-file-menu" :disabled="busy || uploading || removing" @click="openPicker"><el-icon><Upload /></el-icon>{{ uploading ? '正在上传…' : '上传文件' }}</button>
           <button class="upload-file-menu library-menu" @click="uploadMenu=false;emit('files')"><el-icon><FolderOpened /></el-icon>会话文件<span v-if="libraryFiles?.length">{{ libraryFiles.length }}</span></button>
+          <button class="upload-file-menu mobile-settings-menu" @click="uploadMenu=false;emit('settings')"><el-icon><Setting /></el-icon>模型设置</button>
         </el-popover>
         <input ref="fileInput" type="file" :accept="CHAT_FILE_ACCEPT" multiple hidden @change="chooseFiles" />
         <div class="composer-modes" role="group" aria-label="回答模式">
           <button :class="{ selected: mode === 'normal' }" :aria-pressed="mode === 'normal'" :disabled="busy" @click="emit('update:mode', 'normal')">普通</button>
           <button :class="{ selected: mode === 'agent' }" :aria-pressed="mode === 'agent'" :disabled="busy" @click="emit('update:mode', 'agent')"><el-icon><MagicStick /></el-icon>Agent</button>
         </div>
-        <button class="tool-pill coding-button" :class="{ enabled: coding && mode === 'agent' }" @click="emit('coding')" :disabled="busy" aria-label="打开编程 Agent 工作区"><span class="code-symbol">&lt;/&gt;</span>编程 Agent</button>
-        <el-popover placement="top" :width="280" trigger="click">
-          <template #reference><button class="tool-pill" :class="{ enabled: knowledgeBaseId > 0 }" :disabled="busy"><el-icon><Collection /></el-icon>知识库</button></template>
-          <div class="composer-kb-label">补充参考资料</div>
-          <el-select :model-value="knowledgeBaseId" @update:model-value="emit('update:knowledgeBaseId', $event)" style="width: 100%" aria-label="选择知识库">
-            <el-option label="不使用知识库" :value="0" />
-            <el-option v-for="kb in knowledgeBases" :key="kb.id" :value="kb.id" :label="kb.name" :disabled="!kb.chatReady" />
-          </el-select>
-        </el-popover>
+        <button class="tool-pill coding-button" :class="{ enabled: coding && mode === 'agent' }" @click="emit('coding')" :disabled="busy" aria-label="打开编程 Agent 工作区"><span class="code-symbol">&lt;/&gt;</span><span class="coding-label-desktop">编程 Agent</span><span class="coding-label-mobile">编程</span></button>
         <button class="tool-pill settings-tool" aria-label="模型设置" @click="emit('settings')"><el-icon><Setting /></el-icon></button>
       </div>
       <button v-if="busy && !uploading && !removing" class="composer-send stop" aria-label="停止生成" @click="emit('stop')"><span></span></button>
@@ -42,12 +35,22 @@
 import { ref } from 'vue';
 import { CHAT_FILE_ACCEPT, type ChatFile } from '@/utils/chat-files';
 import { clipboardFiles } from '@/utils/clipboard-files';
-const props = defineProps<{ modelValue: string; mode: string; busy: boolean; coding: boolean; files?: ChatFile[]; libraryFiles?:ChatFile[]; uploading?: boolean; removing?: boolean; knowledgeBaseId: number; knowledgeBases: any[] }>();
+const props = defineProps<{ modelValue: string; mode: string; busy: boolean; coding: boolean; files?: ChatFile[]; libraryFiles?:ChatFile[]; uploading?: boolean; removing?: boolean }>();
 const fileInput = ref<HTMLInputElement>();
 const uploadMenu=ref(false);
-const emit = defineEmits(['update:modelValue', 'update:mode', 'update:knowledgeBaseId', 'enter', 'send', 'stop', 'settings', 'coding', 'disableCoding', 'upload', 'files', 'remove']);
-function openPicker(){uploadMenu.value=false;fileInput.value?.click();}
-function chooseFiles(event:Event) { const input=event.target as HTMLInputElement; const files=Array.from(input.files||[]);input.value='';if(files.length)emit('upload',files); }
+const emit = defineEmits(['update:modelValue', 'update:mode', 'enter', 'send', 'stop', 'settings', 'coding', 'disableCoding', 'upload', 'files', 'remove']);
+function openPicker(){
+  uploadMenu.value=false;
+  if(props.busy || props.uploading || props.removing)return;
+  fileInput.value?.click();
+}
+function chooseFiles(event:Event) {
+  const input=event.target as HTMLInputElement;
+  const files=Array.from(input.files||[]);
+  input.value='';
+  if(props.busy || props.uploading || props.removing)return;
+  if(files.length)emit('upload',files);
+}
 function pasteFiles(event:ClipboardEvent) {
   const files=clipboardFiles(event.clipboardData,props.libraryFiles?.map(f=>f.path));
   if(!files.length)return; // Leave ordinary text/code paste to the browser, including cursor/selection behavior.
@@ -62,7 +65,7 @@ function pasteFiles(event:ClipboardEvent) {
 .assistant-composer:focus-within { border-color: #6084b7; box-shadow: 0 0 0 3px #557fb514, 0 6px 24px #253f6212; }
 .assistant-composer :deep(.el-textarea__inner) { box-shadow: none; background: transparent; resize: none; padding: 2px 6px 12px; font-size: 16px; line-height: 1.7; color: #202733; }
 .assistant-composer :deep(.el-textarea__inner::placeholder) { color: #657287; }
-.composer-bottom { display: flex; align-items: flex-end; gap: 10px; justify-content: space-between; }
+.composer-bottom { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
 .add-file { display:grid;place-items:center;width:33px;height:33px;border-radius:50%;background:#e8edf4;font-size:22px;color:#334a68;flex-shrink:0; }
 .upload-file-menu { width:100%;display:flex;gap:9px;align-items:center;padding:12px;border:0;background:#f2f5fa;border-radius:9px;color:#273c59;cursor:pointer;font-size:14px; }
 .attachment-list { display:flex;gap:8px;overflow-x:auto;padding:0 4px 12px; }
@@ -80,12 +83,30 @@ button:focus-visible { outline: 2px solid #668bdf; outline-offset: 2px; }
 .tool-pill { border-radius: 16px; font-size: 13px; padding: 8px 9px; display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
 .tool-pill:hover { background: #eaf0f8; color: #243d62; }
 .tool-pill.enabled { background: #e0eafa; color: #234f89; }
+.coding-label-mobile, .mobile-settings-menu { display: none; }
 .code-symbol { font-size: 13px; font-weight: 600; }
 .composer-send { display: flex; align-items: center; justify-content: center; flex: 0 0 36px; width: 36px; height: 36px; border-radius: 50%; background: #2d4d77; color: white; font-size: 20px; }
 .composer-send:disabled { background: #e0e6ef; color: #77869b; opacity: 1; }
 .stop span { width: 11px; height: 11px; background: white; border-radius: 2px; }
 .library-menu { margin-top:6px;background:transparent; }.library-menu span { margin-left:auto;font-size:12px;color:#657287; }
-.composer-kb-label { font-size: 13px; color: #526177; margin-bottom: 10px; }
-@media(max-width: 900px) { .assistant-composer { border-radius: 21px; padding: 13px 12px 10px; } .composer-tools { gap: 2px; } .tool-pill { font-size: 12px; padding: 7px; } .composer-modes button { padding: 6px 8px; font-size: 12px; } .settings-tool { display: none; } .composer-send { align-self: flex-end; } .coding-attached { font-size: 12px; } }
-@media(max-width: 370px) { .composer-tools { max-width: 230px; } }
+@media(max-width: 900px) {
+  .assistant-composer { border-radius: 21px; padding: 13px 10px 10px; }
+  .composer-bottom { gap: 6px; }
+  .composer-tools { flex-wrap: nowrap; gap: 4px; }
+  .add-file { width: 40px; height: 40px; border-radius: 11px; font-size: 23px; }
+  .composer-modes { flex-shrink: 0; padding: 2px; gap: 0; border-radius: 11px; }
+  .composer-modes button { min-height: 40px; padding: 0 8px; gap: 3px; border-radius: 9px; font-size: 12px; }
+  .tool-pill { flex-shrink: 0; min-height: 40px; border-radius: 10px; font-size: 12px; padding: 0 7px; gap: 4px; }
+  .coding-label-desktop, .settings-tool { display: none; }
+  .coding-label-mobile { display: inline; }
+  .mobile-settings-menu { display: flex; margin-top: 6px; background: transparent; }
+  .composer-send { flex-basis: 40px; width: 40px; height: 40px; }
+  .attachment-remove { width: 36px; height: 36px; }
+  .upload-file-menu { min-height: 44px; }
+}
+@media(max-width: 370px) {
+  .composer-tools { gap: 2px; }
+  .composer-modes button { padding-right: 7px; padding-left: 7px; }
+  .coding-button { padding-right: 5px; padding-left: 5px; }
+}
 </style>

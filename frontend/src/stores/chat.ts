@@ -6,14 +6,13 @@ import { disconnectLocalWorkspace } from '@/utils/local-workspace';
 import { CHAT_NAVIGATION_KEY, emptyChatNavigation, readChatNavigation, type ChatSpace } from '@/utils/chat-navigation';
 import { chatFileRef, type ChatFile } from '@/utils/chat-files';
 import { selectedChatModel } from '@/utils/chat-model-selection';
+import { ensureConversationSettings, type ConversationSettings } from '@/utils/roleplay-defaults';
 
 interface Conversation { id: number; title: string; isPinned: boolean; userId: number; createdAt: string; updatedAt: string;
   conversationType: 'ASSISTANT' | 'ROLEPLAY' | 'LEGACY'; personaKey?: string; personaLabel?: string;
   customPersonaPrompt?: string; sharedMemory?: boolean }
 interface Message { id: number; role: 'system' | 'user' | 'assistant'; content: string; reasoningContent?: string;
   ragMetadata?: any; conversationId: number; createdAt: string; pending?: boolean }
-interface ConversationSettings { agentMode: string; selectedPersona: string; customPersonaName: string;
-  customPersonaPrompt: string; knowledgeBaseId: number; modelId?: string; codingEnabled?: boolean }
 interface ChatModel { id: string; label: string; available: boolean; unavailableReason: string | null }
 interface Run { id: string; status: string; error?: string; result?: { content: string; ragMetadata?: any } }
 
@@ -61,9 +60,10 @@ export const useChatStore = defineStore('chat', () => {
     persistNavigation();
   };
 
-  const getConversationSettings = (id: number): ConversationSettings => conversationSettings.value[id] ||= {
-    agentMode: 'normal', selectedPersona: '', customPersonaName: '', customPersonaPrompt: '', knowledgeBaseId: 0,
-  };
+  const getConversationSettings = (id: number): ConversationSettings => ensureConversationSettings(
+    conversationSettings.value, id,
+    currentConversation.value?.id === id ? currentConversation.value : conversations.value.find(conversation => conversation.id === id),
+  );
   const saveConversationSettings = (id: number, settings: Partial<ConversationSettings>) =>
     Object.assign(getConversationSettings(id), settings);
   const selectedModelId = (id?: number) => selectedChatModel(llmConfig.value.models, llmConfig.value.defaultModelId,

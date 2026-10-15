@@ -5,7 +5,7 @@
       <button class="mobile-conversation-title" @click="isAssistant ? showSettings = true : mobileOptions = !mobileOptions" :aria-expanded="mobileOptions" :disabled="!chatStore.currentConversation && !isAssistant" :aria-label="isAssistant ? '模型设置' : '对话选项'">
         <img v-if="selectedPersona === 'kato_megumi_persona'" :src="publicAsset('kato-megumi-avatar.jpg')" alt="" />
         <span><strong>{{ isLegacy ? '旧历史' : hasPersonaActive ? personaDisplayName : activeSpace === 'ROLEPLAY' ? '角色对话' : '普通 AI' }} <el-icon><ArrowDown /></el-icon></strong>
-          <small>{{ isLegacy ? '仅供回顾' : hasPersonaActive || activeSpace === 'ROLEPLAY' ? '角色扮演 · 独立记忆' : '问答与任务 · 独立记忆' }}<template v-if="selectedKnowledgeBaseId"> · 已选知识库</template></small></span>
+          <small v-if="!isAssistant">{{ isLegacy ? '仅供回顾' : '角色扮演 · 独立记忆' }}<template v-if="selectedKnowledgeBaseId"> · 已选知识库</template></small></span>
       </button>
       <button class="mobile-icon-button" @click="handleNewChat(); mobileSidebar = false" aria-label="新建对话"><el-icon><EditPen /></el-icon></button>
     </header>
@@ -77,12 +77,11 @@
     <main class="chat-main" :class="{ 'persona-theme': hasPersonaActive, 'assistant-main': isAssistant }">
       <header v-if="isAssistant" class="assistant-page-heading"><span>{{ chatStore.currentConversation?.title === 'New Conversation' ? '新对话' : chatStore.currentConversation?.title || 'AI 助手' }}</span><button aria-label="对话设置" @click="showSettings = true"><el-icon><MoreFilled /></el-icon></button></header>
       <div v-if="isAssistant && !chatStore.isLoadingConversation && !chatStore.messages.length" class="assistant-welcome">
-        <div class="welcome-copy"><div class="welcome-mark">✦</div><h1>有什么我能帮你的吗？</h1><p>一个问题，一个想法，都可以从这里开始。</p></div>
+        <div class="welcome-copy"><h1>有什么我能帮你的吗？</h1><p>一个问题，一个想法，都可以从这里开始。</p></div>
         <div class="assistant-start">
-          <div class="assistant-suggestions"><button @click="suggest('帮我看看论坛最新的7条帖子', true)"><el-icon><ChatLineSquare /></el-icon>逛逛社区<span>↗</span></button><button @click="openCoding"><span class="code-symbol">&lt;/&gt;</span>一起写代码<span>↗</span></button><button @click="suggest('帮我梳理一下这个想法：', false)"><el-icon><EditPen /></el-icon>梳理一个想法<span>↗</span></button></div>
-          <AssistantComposer v-model="inputText" v-model:mode="agentMode" v-model:knowledge-base-id="selectedKnowledgeBaseId"
-            :busy="chatStore.isStreaming || uploadingFiles" :coding="codingEnabled" :files="pendingFiles" :library-files="chatFiles" :uploading="uploadingFiles" :knowledge-bases="knowledgeBases" @upload="uploadFiles" @remove="removePendingFile" @files="openFileLibrary" @enter="handleKeyDown" @send="handleSendMessage" @stop="handleStopGeneration" @settings="showSettings = true" @coding="openCoding" />
-          <p class="assistant-footnote">{{ agentMode === 'agent' ? 'Agent 可调用已启用工具；编程修改由你确认。' : '普通模式专注对话；需要工具时可切换 Agent。' }}</p>
+          <div class="assistant-suggestions"><button @click="suggest('帮我看看论坛最新的7条帖子', true)"><el-icon><ChatLineSquare /></el-icon>逛逛社区<span>↗</span></button><button @click="openCoding"><span class="code-symbol">&lt;/&gt;</span>一起写代码<span>↗</span></button></div>
+          <AssistantComposer v-model="inputText" v-model:mode="agentMode"
+            :busy="chatStore.isStreaming || uploadingFiles" :coding="codingEnabled" :files="pendingFiles" :library-files="chatFiles" :uploading="uploadingFiles" @upload="uploadFiles" @remove="removePendingFile" @files="openFileLibrary" @enter="handleKeyDown" @send="handleSendMessage" @stop="handleStopGeneration" @settings="showSettings = true" @coding="openCoding" />
         </div>
       </div>
       <div v-else-if="!chatStore.currentConversation" class="chat-empty">
@@ -144,7 +143,7 @@
             </el-button>
           </div>
         </div>
-        <div v-if="knowledgeError || selectedKnowledgeIssue" class="knowledge-notice" role="status">
+        <div v-if="!isAssistant && (knowledgeError || selectedKnowledgeIssue)" class="knowledge-notice" role="status">
           {{ knowledgeError || selectedKnowledgeIssue }}
           <el-button text type="primary" @click="loadKnowledgeBases">刷新列表</el-button>
         </div>
@@ -220,8 +219,8 @@
         </div>
         <div class="chat-input-area">
           <template v-if="isAssistant">
-            <AssistantComposer v-model="inputText" v-model:mode="agentMode" v-model:knowledge-base-id="selectedKnowledgeBaseId"
-              :busy="chatStore.isStreaming || uploadingFiles" :coding="codingEnabled" :files="pendingFiles" :library-files="chatFiles" :uploading="uploadingFiles" :knowledge-bases="knowledgeBases" @upload="uploadFiles" @remove="removePendingFile" @files="openFileLibrary" @enter="handleKeyDown" @send="handleSendMessage" @stop="handleStopGeneration" @settings="showSettings = true" @coding="openCoding" />
+            <AssistantComposer v-model="inputText" v-model:mode="agentMode"
+              :busy="chatStore.isStreaming || uploadingFiles" :coding="codingEnabled" :files="pendingFiles" :library-files="chatFiles" :uploading="uploadingFiles" @upload="uploadFiles" @remove="removePendingFile" @files="openFileLibrary" @enter="handleKeyDown" @send="handleSendMessage" @stop="handleStopGeneration" @settings="showSettings = true" @coding="openCoding" />
             <p class="assistant-footnote">内容由 AI 生成，重要信息请核实。</p>
           </template>
           <div v-else class="chat-input-wrapper">
@@ -326,6 +325,7 @@ import MessageAttachments from '@/components/MessageAttachments.vue';
 import GenerationStatus from '@/components/GenerationStatus.vue';
 import { uploadChatFiles, chatFileKey, type ChatFile } from '@/utils/chat-files';
 import { recoverChatDraft, sameDraftFiles, sameDraftSession } from '@/utils/chat-draft-recovery';
+import { defaultKatoKnowledgeBaseId } from '@/utils/roleplay-defaults';
 import { publicAsset, CONNECTION_SETTINGS_ENABLED } from '@/utils/api';
 import { useChatStore } from '@/stores/chat';
 import { useUserStore } from '@/stores/user';
@@ -352,7 +352,7 @@ const messagePlaceholder = window.matchMedia('(pointer: coarse)').matches
   ? '输入消息… 回车换行，点箭头发送'
   : '输入消息… (Enter 发送, Shift+Enter 换行)';
 const showSettings = ref(false);
-const showCode = ref(false), draftMode = ref('normal'), draftKnowledgeBase = ref(0), draftCoding = ref(false);
+const showCode = ref(false), draftMode = ref('normal'), draftCoding = ref(false);
 const showRenameDialog = ref(false);
 const renameTitle = ref('');
 const renamingConversation = ref<any>(null);
@@ -408,6 +408,10 @@ const switchPersona = async (persona: string) => {
       ElMessage.info('已新建独立会话，原来的消息与记忆保留在原会话');
     }
     activeSpace.value = persona ? 'ROLEPLAY' : 'ASSISTANT';
+    if (persona === 'kato_megumi_persona' && chatStore.currentConversation) {
+      chatStore.saveConversationSettings(chatStore.currentConversation.id, { agentMode: 'agent', knowledgeBaseId: 0, katoDefaultKnowledgePending: true });
+      applyKatoKnowledgeDefault();
+    }
   } catch (e: any) { ElMessage.error(e.message || '切换失败'); }
 };
 const messageIdentity = (msg: any) => {
@@ -462,13 +466,14 @@ const customPersonaPrompt = computed({
 
 const selectedKnowledgeBaseId = computed({
   get: () => {
+    if (isAssistant.value) return 0;
     const cid = chatStore.currentConversation?.id;
-    return cid ? chatStore.getConversationSettings(cid).knowledgeBaseId : draftKnowledgeBase.value;
+    return cid ? chatStore.getConversationSettings(cid).knowledgeBaseId : 0;
   },
   set: (val: number) => {
+    if (isAssistant.value) return;
     const cid = chatStore.currentConversation?.id;
-    if (cid) chatStore.saveConversationSettings(cid, { knowledgeBaseId: val || 0 });
-    else draftKnowledgeBase.value = val || 0;
+    if (cid) chatStore.saveConversationSettings(cid, { knowledgeBaseId: val || 0, katoDefaultKnowledgePending: false });
   },
 });
 
@@ -480,8 +485,15 @@ const selectedModelId = computed({
   },
 });
 const selectedModel = computed(() => chatStore.llmConfig.models.find(m => m.id === selectedModelId.value));
+const katoKnowledgeDefaultPending = computed(() => {
+  const conv = chatStore.currentConversation;
+  return conv?.conversationType === 'ROLEPLAY' && conv.personaKey === 'kato_megumi_persona' &&
+    !!chatStore.getConversationSettings(conv.id).katoDefaultKnowledgePending;
+});
 const selectedKnowledgeIssue = computed(() => {
-  if (!selectedKnowledgeBaseId.value || knowledgeLoading.value) return '';
+  if (knowledgeLoading.value) return '';
+  if (katoKnowledgeDefaultPending.value) return '默认原作知识库暂不可用，请选择可访问且已发布的小说库。';
+  if (!selectedKnowledgeBaseId.value) return '';
   const kb = knowledgeBases.value.find(k => k.id === selectedKnowledgeBaseId.value);
   return !kb ? '所选知识库已不可访问，请重新选择；不会自动改为无知识库回答。' : !kb.chatReady ? kb.chatUnavailableReason : '';
 });
@@ -501,10 +513,10 @@ async function ensureAssistantConversation() {
   try { await creatingAssistant; } finally { creatingAssistant = undefined; }
 }
 async function createAssistant() {
-  const mode = draftMode.value, kb = draftKnowledgeBase.value, coding = draftCoding.value, draft = inputText.value;
+  const mode = draftMode.value, coding = draftCoding.value, draft = inputText.value;
   const conversation = await chatStore.createConversation(undefined, { conversationType: 'ASSISTANT' });
   if (!ownsView() || !isAssistant.value || chatStore.currentConversation) throw new Error('已切换页面，请在当前会话重试');
-  chatStore.saveConversationSettings(conversation.id, { agentMode: mode, knowledgeBaseId: kb, codingEnabled: coding });
+  chatStore.saveConversationSettings(conversation.id, { agentMode: mode, knowledgeBaseId: 0, codingEnabled: coding });
   await chatStore.selectConversation(conversation);
   if (!ownsView() || chatStore.navigation.conversationId !== conversation.id) throw new Error('已切换会话，请重试');
   inputText.value = draft;
@@ -749,6 +761,9 @@ const handleSendMessage = async () => {
   const text = inputText.value.trim();
   if (!text && !pendingFiles.value.length) return;
   if (!selectedModel.value?.available) { ElMessage.warning('请选择可用的服务端模型'); return; }
+  if (katoKnowledgeDefaultPending.value) {
+    ElMessage.warning(knowledgeError.value || (knowledgeLoading.value ? '正在加载原作知识库，请稍后发送。' : selectedKnowledgeIssue.value)); return;
+  }
   if (selectedKnowledgeBaseId.value && (knowledgeError.value || selectedKnowledgeIssue.value)) {
     ElMessage.warning(knowledgeError.value || selectedKnowledgeIssue.value); return;
   }
@@ -889,11 +904,23 @@ const loadKnowledgeBases = async () => {
   knowledgeLoading.value = true; knowledgeError.value = '';
   try {
     const data = await request.get<any[]>('/rag/knowledge-bases');
+    if (!ownsView()) return;
     knowledgeBases.value = data || [];
+    applyKatoKnowledgeDefault();
   } catch {
     knowledgeError.value = '知识库列表加载失败，请检查连接后重试。';
   } finally { knowledgeLoading.value = false; }
 };
+function applyKatoKnowledgeDefault() {
+  const conv = chatStore.currentConversation;
+  if (!ownsView() || !conv || !katoKnowledgeDefaultPending.value) return;
+  const id = defaultKatoKnowledgeBaseId(knowledgeBases.value);
+  if (id) chatStore.saveConversationSettings(conv.id, { knowledgeBaseId: id, katoDefaultKnowledgePending: false });
+}
+watch(() => [chatStore.currentConversation?.id, chatStore.currentConversation?.personaKey, knowledgeBases.value], applyKatoKnowledgeDefault, { flush: 'post' });
+watch(() => [isAssistant.value, isLegacy.value], ([assistant, legacy]) => {
+  if (!assistant && !legacy) void loadKnowledgeBases();
+}, { immediate: true });
 
 const toggleAllSkills = () => {
   if (enabledSkills.value.length === toolSkills.value.length) {
@@ -916,7 +943,7 @@ watch(
 onMounted(async () => {
   window.addEventListener('pagehide', onPageHide);
   try {
-    await Promise.allSettled([chatStore.loadDefaultConfig(), loadSkills(), loadKnowledgeBases()]);
+    await Promise.allSettled([chatStore.loadDefaultConfig(), loadSkills()]);
     if (!ownsView()) return;
     await chatStore.loadConversations();
     if (!ownsView()) return;
@@ -928,9 +955,7 @@ onMounted(async () => {
     inputText.value = chatStore.currentConversation ? chatStore.drafts[chatStore.currentConversation.id] || '' : '';
     const requestedKb = Number(route.query.knowledgeBaseId);
     if (requestedKb > 0) {
-      if (!chatStore.currentConversation || isLegacy.value) await chatStore.selectConversation(await chatStore.createConversation('知识库问答'));
-      if (!ownsView()) return;
-      selectedKnowledgeBaseId.value = requestedKb;
+      if (!isAssistant.value && !isLegacy.value) selectedKnowledgeBaseId.value = requestedKb;
       await router.replace({ path: '/chat', query: {} });
     }
   } catch (e: any) { if (ownsView()) ElMessage.error(e.message || '会话加载失败，请重试'); }
@@ -2037,7 +2062,6 @@ onMounted(async () => {
 .assistant-page-heading button:hover { background: #e5eaf2; }
 .assistant-welcome { min-height: 0; flex: 1; display: flex; flex-direction: column; align-items: center; overflow: auto; padding: 20px 32px 24px; }
 .welcome-copy { margin-top: auto; text-align: center; padding: 30px 0 38px; }
-.welcome-mark { margin-bottom: 14px; color: #426696; font-size: 32px; }
 .welcome-copy h1 { font-size: clamp(26px, 2.5vw, 36px); letter-spacing: -1px; font-weight: 600; color: #18212f; margin: 0 0 14px; }
 .welcome-copy p { font-size: 14px; color: var(--assistant-muted); margin: 0; }
 .assistant-start { width: min(1060px, 100%); margin-top: auto; }
@@ -2079,16 +2103,16 @@ onMounted(async () => {
 .assistant-layout .btn-settings { color: #394b64; border-color: #becbdc; background: #f7f9fc; }
 @media(max-width: 900px) {
   .assistant-layout { background: var(--assistant-canvas); }
-  .assistant-layout .mobile-chat-header { background: #edf1f7; border-bottom-color: #d5deea; }
+  .assistant-layout .mobile-chat-header { height: 60px; background: var(--assistant-canvas); border-bottom-color: #e1e6ee; }
   .assistant-layout .mobile-conversation-title { color: #24344d; }
   .assistant-layout .mobile-conversation-title small { color: #5d6879; }
   .assistant-page-heading { display: none; }
   .assistant-welcome { padding: 0 16px 12px; }
   .welcome-copy { padding: 20px 0 38px; }
-  .welcome-copy h1 { font-size: 26px; }
-  .welcome-copy p { font-size: 13px; }
+  .welcome-copy h1 { font-size: 24px; line-height: 1.4; }
+  .welcome-copy p { font-size: 13px; line-height: 1.7; }
   .assistant-suggestions { gap: 8px; margin-bottom: 16px; }
-  .assistant-suggestions button { font-size: 13px; padding: 10px 12px; gap: 6px; }
+  .assistant-suggestions button { font-size: 13px; min-height: 40px; padding: 9px 12px; gap: 6px; border-radius: 12px; }
   .assistant-main .chat-input-area { padding: 9px 12px 10px; }
   .assistant-main .chat-messages { padding: 20px 19px 8px; }
   .assistant-main .chat-message.assistant .message-bubble { font-size: 16px; line-height: 1.85; }

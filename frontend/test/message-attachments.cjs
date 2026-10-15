@@ -22,6 +22,9 @@ const recoveryModule={exports:{}};
 new Function('module','exports',ts.transpileModule(readFileSync(join(__dirname,'../src/utils/chat-draft-recovery.ts'),'utf8'),{
  compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(recoveryModule,recoveryModule.exports);
 const {recoverChatDraft,sameDraftFiles,sameDraftSession}=recoveryModule.exports;
+const roleplayDefaultsModule={exports:{}};
+new Function('module','exports',ts.transpileModule(readFileSync(join(__dirname,'../src/utils/roleplay-defaults.ts'),'utf8'),{
+ compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(roleplayDefaultsModule,roleplayDefaultsModule.exports);
 const owner={userId:7,epoch:3}, attachment={id:42,path:'fixture.png',kind:'image',revision:1};
 const failed={text:'Describe this fixture image',files:[attachment]};
 const recoveryInput=(overrides={})=>({expectedSession:owner,currentSession:{...owner},navigationUserId:7,conversationExists:true,
@@ -70,17 +73,17 @@ const vue=require('vue');
 const deferred=()=>{let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return{promise,resolve,reject};};
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 function draftConversation(id=11,userId=7){return{id,userId,title:'Synthetic fixture',conversationType:'ASSISTANT',personaKey:'assistant'};}
-function chatRecoveryFixture({acceptImmediately=true}={}){
- let epoch=3,admission;
+function chatRecoveryFixture({acceptImmediately=true,knowledgeBaseId=0}={}){
+ let epoch=3,admission,sentArguments;
  const run=deferred(),errors=[],request={get:async path=>path.startsWith('/coding/')?{files:[attachment]}:[]};
  const store=vue.reactive({currentConversation:draftConversation(),conversations:[draftConversation()],navigation:{userId:7,space:'ASSISTANT',conversationId:11,scroll:{}},
   messages:[],drafts:{},draftAttachments:{11:[{...attachment}]},isStreaming:false,isLoadingConversation:false,
   llmConfig:{models:[{id:'fixture-model',available:true}],defaultModelId:'fixture-model'},
   initializeNavigation(){},setSpace(space){this.navigation.space=space;},selectedModelId(){return'fixture-model';},
-  getConversationSettings(){return{agentMode:'normal',knowledgeBaseId:0,codingEnabled:false};},saveConversationSettings(){},
+  getConversationSettings(){return{agentMode:'normal',knowledgeBaseId,codingEnabled:false};},saveConversationSettings(){},
   saveView(id,scroll,draft){this.drafts[id]=draft;},loadDefaultConfig:async()=>{},loadConversations:async()=>{},
   async selectConversation(conversation){this.currentConversation=conversation;},clearSelection(){this.currentConversation=null;},
-  sendConfigured(...args){this.isStreaming=true;admission=args[8]?.onAccepted;if(acceptImmediately)admission?.();return run.promise.finally(()=>{this.isStreaming=false;});},
+  sendConfigured(...args){sentArguments=args;this.isStreaming=true;admission=args[8]?.onAccepted;if(acceptImmediately)admission?.();return run.promise.finally(()=>{this.isStreaming=false;});},
  });
  const user=vue.reactive({user:{id:7,username:'Fixture'},getAuthSession:()=>({userId:user.user?.id??null,epoch})});
  const navigationModule={exports:{}};
@@ -94,6 +97,7 @@ function chatRecoveryFixture({acceptImmediately=true}={}){
    '@/stores/chat':{useChatStore:()=>store},'@/stores/user':{useUserStore:()=>user},'@/utils/request':request,
    '@/utils/api':{publicAsset:path=>path,CONNECTION_SETTINGS_ENABLED:false},'@/utils/chat-navigation':navigationModule.exports,
    '@/utils/chat-draft-recovery':recoveryModule.exports,'@/utils/chat-files':load(request),
+   '@/utils/roleplay-defaults':roleplayDefaultsModule.exports,
    '@/utils/forum-links':{},marked:{marked:{}},dompurify:{},dayjs:()=>({format:()=>''}),
   };
   const script=readFileSync(join(__dirname,'../src/views/Chat.vue'),'utf8').match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1];
@@ -107,8 +111,17 @@ function chatRecoveryFixture({acceptImmediately=true}={}){
   },mod,mod.exports,{matchMedia:()=>({matches:false}),addEventListener(){},removeEventListener(){}}));
   return{...mod.exports,mount:async()=>{for(const fn of mounted)await fn();await tick();},unmount(){for(const fn of unmounted)fn();scope.stop();}};
  }
- return{store,user,run,errors,view,accept:()=>admission?.(),switchSession(id){epoch++;user.user=id?{id,username:'Fixture '+id}:null;store.navigation.userId=id??0;}};
+ return{store,user,run,errors,view,sentArguments:()=>sentArguments,accept:()=>admission?.(),switchSession(id){epoch++;user.user=id?{id,username:'Fixture '+id}:null;store.navigation.userId=id??0;}};
 }
+
+test('ordinary AI does not send an obsolete saved novel knowledge base with an attachment',async()=>{
+ const f=chatRecoveryFixture({knowledgeBaseId:73}),active=f.view();await active.mount();active.inputText.value='Read the attached file';
+ const sending=active.handleSendMessage();await tick();
+ assert(f.sentArguments(),'The ordinary request must still be sent');
+ assert.equal(f.sentArguments()[5],undefined,'A hidden old knowledge-base selection must not affect ordinary AI');
+ assert.deepEqual(f.sentArguments()[8].files,[attachment],'Message attachments remain independent and available');
+ f.run.resolve(true);await sending;active.unmount();assert.deepEqual(f.errors,[]);
+});
 
 test('real Chat.vue send recovers a failed accepted draft after leaving and hydrates it on return',async()=>{
  const f=chatRecoveryFixture(),old=f.view();await old.mount();old.inputText.value=failed.text;
