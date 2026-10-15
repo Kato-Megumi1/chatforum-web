@@ -95,7 +95,13 @@ const notifications = useNotificationStore();
 const directMessages = useDirectMessageStore();
 let notificationTimer: ReturnType<typeof setInterval> | undefined;
 const refreshNotifications = () => { if (!document.hidden) { void notifications.refresh(); void directMessages.refresh(); } };
-watch(() => userStore.user?.id, () => { notifications.clear(); directMessages.clear(); if (userStore.user) refreshNotifications(); }, { immediate: true });
+watch(() => {
+  const session = userStore.getAuthSession();
+  // Token updates make the closure-only epoch observable on same-account re-login.
+  // Rotating a token within the same epoch leaves this key unchanged.
+  const authenticated = !!userStore.user && !!userStore.token;
+  return `${authenticated ? session.userId : 'anonymous'}:${session.epoch}`;
+}, () => { notifications.clear(); directMessages.clear(); if (userStore.user) refreshNotifications(); }, { immediate: true });
 watch(() => route.path, refreshNotifications);
 onMounted(() => { window.addEventListener('focus', refreshNotifications); notificationTimer = setInterval(refreshNotifications, 60000); });
 onUnmounted(() => { window.removeEventListener('focus', refreshNotifications); clearInterval(notificationTimer); });

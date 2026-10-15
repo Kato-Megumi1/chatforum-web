@@ -7,7 +7,7 @@ function compile(file,imports){
  new Function('require','module','exports','localStorage',code)(name=>{if(Object.hasOwn(imports,name))return imports[name];throw Error(name);},mod,mod.exports,{getItem:()=>null,setItem(){},removeItem(){}});return mod.exports;
 }
 function fixture(options={}){
- const actions=[],messages=[],dispatches=[];let rejected,fulfilled,requested,epoch=0;
+ const actions=[],messages=[],dispatches=[],invalidations=[];let rejected,fulfilled,requested,epoch=0;
  const store={user:{id:1},token:'account-token-1',refreshToken:'account-refresh-1',
   getAuthSession:()=>({userId:store.user?.id??null,epoch}),
   clearAuth:()=>{actions.push('clear');epoch++;store.user=null;store.token=store.refreshToken='';},
@@ -19,11 +19,34 @@ function fixture(options={}){
  http.interceptors={request:{use(handler){requested=handler;}},response:{use(ok,error){fulfilled=ok;rejected=error;}}};
  const axios={create:()=>http,post:async(url,body)=>{actions.push(['refresh',body.refreshToken]);return options.refresh?options.refresh(body):success(store.user.id);}};
  const request=compile('../src/utils/request.ts',{'axios':axios,'./api':{API_BASE:'/api',apiUrl:p=>'/api'+p,normalizeMedia:v=>v},
-  'element-plus':{ElMessage:{error:message=>messages.push(message)}},'@/stores/user':{useUserStore:()=>store}});
+  'element-plus':{ElMessage:{error:message=>messages.push(message)}},'@/stores/user':{useUserStore:()=>store},
+  './forum-feed-cache':{invalidateForumFeedCache:()=>invalidations.push(true)}});
  const stamp=(url='/direct-messages/conversations/17/messages')=>requested({url,headers:{}});
  const error=(config,status=401,message)=>({config,response:{status,data:message?{message}:{}}});
- return{rejected,fulfilled,requested,stamp,error,actions,messages,store,switchAccount,request:request.default,dispatches};
+ return{rejected,fulfilled,requested,stamp,error,actions,messages,store,switchAccount,request:request.default,dispatches,invalidations};
 }
+
+test('cancelled background reads do not show a toast or rotate authentication',async()=>{
+ const f=fixture(),error={config:f.stamp('/forum/feed'),code:'ERR_CANCELED',message:'canceled'};
+ await assert.rejects(f.rejected(error),e=>e===error);assert.deepEqual(f.actions,[]);assert.deepEqual(f.messages,[]);
+});
+
+test('quiet reads keep inline errors quiet but still enforce expired-session handling',async()=>{
+ const f=fixture(),config={...f.stamp('/forum/feed'),_quiet:true};
+ const error=f.error(config,503,'temporarily unavailable');await assert.rejects(f.rejected(error));
+ await assert.rejects(f.fulfilled({config,data:{success:false,message:'business failure'}}));assert.deepEqual(f.messages,[]);
+ const g=fixture({refresh:()=>Promise.reject(new Error('expired'))});
+ await assert.rejects(g.rejected(g.error({...g.stamp('/forum/feed'),_quiet:true})));
+ assert.deepEqual(g.actions,[['refresh','account-refresh-1'],'clear']);assert.deepEqual(g.messages,['登录已过期，请重新登录']);
+});
+
+test('confirmed forum writes invalidate summaries, while views, reads, and failed writes do not',async()=>{
+ const f=fixture();
+ for(const [method,url,invalidates] of [['post','/forum/posts',true],['put','/forum/posts/4',true],['delete','/forum/comments/3',true],['post','/users/2/follow',true],['post','/forum/posts/4/view',false],['get','/forum/feed',false],['put','/forum/notifications/3/read',false]]){
+  const before=f.invalidations.length;f.fulfilled({config:{...f.stamp(url),method},data:{success:true,data:{}}});assert.equal(f.invalidations.length-before,Number(invalidates),url);
+ }
+ const count=f.invalidations.length;await assert.rejects(f.fulfilled({config:{...f.stamp('/forum/posts'),method:'post',_quiet:true},data:{success:false}}));assert.equal(f.invalidations.length,count);
+});
 test('incorrect login credentials never rotate or clear a separately stored session',async()=>{
  const f=fixture(),error=f.error(f.stamp('/auth/login'),401,'Invalid credentials');
  await assert.rejects(f.rejected(error),e=>e===error);assert.deepEqual(f.actions,[]);assert.deepEqual(f.messages,['邮箱或密码不正确']);

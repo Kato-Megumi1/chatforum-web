@@ -46,12 +46,14 @@ test('notification failure is a retryable error, not a false empty inbox', async
   await assert.doesNotReject(f.load());
   assert.equal(f.loadError.value, true); assert.equal(f.loading.value, false);
   assert.match(f.source, /!items\.length && !loading && !loadError/);
+  f.badge.unreadCount = 4; // The shared count store owns the badge, independently of a list snapshot.
   f.respond(async () => ({ data: [{ id: 11, title: 'Synthetic update' }], total: 1, unreadCount: 1 }));
-  await f.load(); assert.equal(f.loadError.value, false); assert.equal(f.items.value[0].id, 11); assert.equal(f.badge.unreadCount, 1);
+  await f.load(); assert.equal(f.loadError.value, false); assert.equal(f.items.value[0].id, 11); assert.equal(f.badge.unreadCount, 4);
+  assert.equal(f.badge.refreshCalls, 2);
 });
 
 test('notification categories filter on the server, reset pagination and ignore stale category responses', async () => {
-  const f = notification(), old = deferred();
+  const f = notification(), old = deferred(); f.badge.unreadCount = 15;
   f.page.value = 4; f.items.value = [{ id: 9 }]; f.respond(() => old.promise);
   const pending = f.load();
   f.respond(async () => ({ data: [{ id: 21, type: 'LIKE' }], total: 1, unreadCount: 15 }));
@@ -60,11 +62,52 @@ test('notification categories filter on the server, reset pagination and ignore 
   assert.equal(f.page.value, 1); assert.equal(f.calls.at(-1).options.params.type, 'LIKE');
   old.resolve({ data: [{ id: 2, type: 'COMMENT' }], total: 80, unreadCount: 16 }); await pending;
   assert.deepEqual(f.items.value, [{ id: 21, type: 'LIKE' }]);
-  assert.equal(f.badge.unreadCount, 15); // The badge remains global, not the filtered page size.
+  assert.equal(f.badge.unreadCount, 15); // Only the global count store can update this value.
   f.unreadOnly.value = true; await f.load();
   assert.deepEqual(f.calls.at(-1).options.params, { page: 1, limit: 20, unreadOnly: true, type: 'LIKE' });
   f.setType(''); await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.calls.at(-1).options.params.type, undefined);
+});
+
+test('an older list snapshot cannot undo the forced badge refresh after marking a notification read', async () => {
+  const f = notification(), list = deferred(), item = { id: 31, isRead: false }, refreshOptions = [];
+  f.badge.unreadCount = 7;
+  f.badge.refresh = async options => {
+    refreshOptions.push(options);
+    if (options?.force) f.badge.unreadCount = 0;
+  };
+  f.respond(call => call.method === 'get' ? list.promise : Promise.resolve({}));
+  const loading = f.load();
+  await f.read(item); assert.equal(item.isRead, true); assert.equal(f.badge.unreadCount, 0);
+  list.resolve({ data: [], total: 0, unreadCount: 7 }); await loading;
+  assert.equal(f.badge.unreadCount, 0);
+  assert.deepEqual(refreshOptions, [undefined, { force: true }]);
+});
+
+test('layout observes a same-account re-login epoch through token changes without clearing on token renewal', async t => {
+  const vue = require('vue'), identity = vue.reactive({ user: { id: 1 }, token: 'synthetic-old-token' });
+  let epoch = 1;
+  const user = { get user() { return identity.user; }, get token() { return identity.token; },
+    getAuthSession: () => ({ userId: identity.user?.id ?? null, epoch }) };
+  const badge = () => ({ clears: 0, refreshes: 0, clear() { this.clears++; }, refresh() { this.refreshes++; } });
+  const notifications = badge(), messages = badge();
+  const imports = { '@/utils/api': { publicAsset: path => path },
+    vue: { computed: vue.computed, watch: vue.watch, onMounted() {}, onUnmounted() {} },
+    '@element-plus/icons-vue': {}, '@/stores/notifications': { useNotificationStore: () => notifications },
+    '@/stores/direct-messages': { useDirectMessageStore: () => messages },
+    'vue-router': { useRouter: () => ({}), useRoute: () => ({ path: '/forum' }) },
+    'element-plus': {}, '@/stores/user': { useUserStore: () => user },
+    '@/composables/useMobileViewport': { useMobileViewport: () => ({}) } };
+  const source = readFileSync(join(__dirname, '../src/layouts/MainLayout.vue'), 'utf8').match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1];
+  const code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const scope = vue.effectScope(); t.after(() => scope.stop());
+  scope.run(() => new Function('require', 'exports', 'document', code)(name => imports[name], {}, { hidden: false }));
+  assert.equal(notifications.clears, 1); assert.equal(messages.refreshes, 1);
+  // Epoch is intentionally closure-only; replacing the token must still trigger the identity getter.
+  epoch++; identity.token = 'synthetic-new-login'; await vue.nextTick();
+  assert.equal(notifications.clears, 2); assert.equal(messages.refreshes, 2);
+  identity.token = 'synthetic-normal-token-renewal'; await vue.nextTick();
+  assert.equal(notifications.clears, 2); assert.equal(messages.refreshes, 2);
 });
 
 test('late failed notification load cannot replace a newer successful filter result', async () => {

@@ -106,11 +106,13 @@ function target(item: any) { return typeof item.url === 'string' && /^\/(?:forum
 async function load() {
   const stamp = ++generation, account = user.user?.id;
   if (!account) return;
+  // Count reads share the store's request/TTL gate; list snapshots cannot overwrite its newer result.
+  void notifications.refresh().catch(() => { /* Badge failures do not block the notification list. */ });
   loading.value = true; loadError.value = false;
   try { const data: any = await request.get('/forum/notifications', { params: { page: page.value, limit: 20, unreadOnly: unreadOnly.value,
     ...(notificationType.value ? { type: notificationType.value } : {}) } });
     if (stamp !== generation || account !== user.user?.id) return;
-    items.value = data.data; total.value = data.total; notifications.unreadCount = data.unreadCount;
+    items.value = data.data; total.value = data.total;
   } catch { if (stamp === generation && account === user.user?.id) loadError.value = true; }
   finally { if (stamp === generation) loading.value = false; }
 }
@@ -123,7 +125,7 @@ async function read(item: any) {
     if (unreadOnly.value) { items.value = items.value.filter(i => i.id !== item.id); total.value = Math.max(0, total.value - 1); }
     const emptyLastPage = unreadOnly.value && !items.value.length && page.value > 1;
     // A badge refresh is auxiliary; it must not strand the list on an empty page.
-    try { await notifications.refresh(); } catch { /* retain the current badge until its next refresh */ }
+    try { await notifications.refresh({ force: true }); } catch { /* retain the current badge until its next refresh */ }
     if (emptyLastPage && stamp === generation && account === user.user?.id) { page.value--; await load(); }
   } catch { /* The shared handler reports the failure; keep the last confirmed read state. */ }
   finally { if (action === identityGeneration && account === user.user?.id) busy.delete(item.id); }
@@ -139,7 +141,7 @@ async function readAll() {
   if (markingAll.value) return; markingAll.value = true;
   const account = user.user?.id, stamp = generation, action = ++markAllRequest;
   try { await request.put('/forum/notifications/read-all'); if (account !== user.user?.id || stamp !== generation) return;
-    try { await notifications.refresh(); } catch { /* the list still needs to reflect the confirmed operation */ }
+    try { await notifications.refresh({ force: true }); } catch { /* the list still needs to reflect the confirmed operation */ }
     if (account !== user.user?.id || stamp !== generation) return;
     if (unreadOnly.value) page.value = 1;
     await load(); }

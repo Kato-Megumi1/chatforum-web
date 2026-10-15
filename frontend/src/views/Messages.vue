@@ -558,7 +558,7 @@ async function readVisible() {
       lastAcknowledged = result.lastReadMessageId;
       const item = threads.value.find((row) => row.id === id);
       if (item) item.unreadCount = result.unreadCount;
-      void counts.refresh();
+      void counts.refresh({ force: true });
     }
   } catch {
     /* No successful-read claim on errors; retry when the current thread is polled. */
@@ -729,7 +729,7 @@ async function send(retry = false) {
     sendUncertain.value = false;
     await toBottom();
     void loadThreads();
-    void counts.refresh();
+    void counts.refresh({ force: true });
   } catch (error) {
     if (current(account, stamp, id)) {
       sendUncertain.value = uncertainDirectSend(error);
@@ -770,7 +770,7 @@ async function decide(action: "accept" | "decline") {
     if (!current(account, stamp, id)) return;
     replaceThread(result.conversation);
     void loadThreads();
-    void counts.refresh();
+    void counts.refresh({ force: true });
   } catch {
     /* Do not change request state after a failed decision. */
   } finally {
@@ -804,7 +804,7 @@ async function toggleBlock() {
     if (!current(account, stamp, id)) return;
     await selectThread(id);
     void loadThreads();
-    void counts.refresh();
+    void counts.refresh({ force: true });
   } catch {
     /* No local block/unblock success claim without the server response. */
   }

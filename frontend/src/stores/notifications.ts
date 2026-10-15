@@ -1,18 +1,35 @@
-import { ref } from 'vue';
+import { ref, watch } from 'vue';
 import { defineStore } from 'pinia';
 import request from '@/utils/request';
+import { createReadRefreshCache } from '@/utils/read-refresh-cache';
 import { useUserStore } from './user';
 
 export const useNotificationStore = defineStore('notifications', () => {
   const unreadCount = ref(0);
-  let generation = 0;
-  function clear() { generation++; unreadCount.value = 0; }
-  async function refresh() {
-    const user = useUserStore(); if (!user.user || !user.token) { clear(); return; }
-    const account = user.user.id, stamp = ++generation;
-    try { const result: any = await request.get('/forum/notifications/unread-count');
-      if (stamp === generation && useUserStore().user?.id === account) unreadCount.value = result.unreadCount;
-    } catch { /* notification badges must not block navigation */ }
+  const user = useUserStore();
+  const scope = () => {
+    // Reading token also observes same-account re-login; normal token renewal keeps its epoch.
+    if (!user.user || !user.token) return null;
+    const session = user.getAuthSession();
+    return `${session.userId}:${session.epoch}`;
+  };
+  const cache = createReadRefreshCache({
+    scope,
+    load: () => request.get<{ unreadCount: number }>('/forum/notifications/unread-count'),
+    apply(result) {
+      unreadCount.value = Number.isSafeInteger(result.unreadCount) ? Math.max(0, result.unreadCount) : 0;
+    },
+    onError(error) {
+      const status = (error as { response?: { status?: number } })?.response?.status;
+      if (status === 401 || status === 403) clear();
+      // Badge failures remain non-blocking; the next refresh may retry immediately.
+    },
+  });
+  function clear() {
+    cache.clear();
+    unreadCount.value = 0;
   }
+  watch(scope, clear, { flush: 'sync' });
+  const refresh = cache.refresh;
   return { unreadCount, refresh, clear };
 });

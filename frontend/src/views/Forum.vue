@@ -87,9 +87,14 @@
         <div v-if="userStore.user && sortBy !== 'likes'" class="feed-tracking desktop-feed-detail"><el-button :loading="tracking" :disabled="!canTrack || trackedScopes.has(trackingKey)" @click="trackCurrent">{{ trackedScopes.has(trackingKey) ? '已开启追踪' : sortBy === 'popular' ? '追踪热榜变化' : '追踪新帖' }}</el-button><span>{{ trackingHint }}</span><router-link to="/notifications">管理追踪</router-link></div>
         <el-alert v-if="navigationNotice" :title="navigationNotice" type="info" :closable="false" />
         <el-alert v-if="cursorExpired" title="这份列表快照已失效，请刷新首屏查看最新结果。" type="warning" :closable="false"><el-button link @click="refreshFirst">刷新首屏</el-button></el-alert>
-        <el-alert v-if="loadError" title="暂时没能加载帖子，请重试" type="error" :closable="false"><el-button link @click="loadPosts">重新加载</el-button></el-alert>
-        <div class="post-list" v-loading="loading">
-          <div v-if="posts.length === 0 && !loading && !loadError && !cursorExpired && !hotBlocked" class="empty-posts">
+        <div v-if="loading && hasListSnapshot" class="feed-loading-status" role="status">{{ usingCachedSnapshot ? '正在核对更新，先显示上次列表' : '正在更新帖子…' }}</div>
+        <div v-if="loadSlow" class="feed-retry-notice" role="status"><span>网络响应较慢，可以继续等待或重试。</span><el-button link @click="retryCurrentPage">重新加载</el-button></div>
+        <el-alert v-if="loadError" :title="hasListSnapshot ? '更新失败，当前显示上次列表' : '暂时没能加载帖子，请重试'" type="warning" :closable="false"><el-button link @click="retryCurrentPage">重新加载</el-button></el-alert>
+        <div class="post-list" :aria-busy="loading">
+          <div v-if="loading && !hasListSnapshot" class="feed-skeleton" role="status" aria-label="正在加载帖子">
+            <div v-for="row in 4" :key="row" class="post-skeleton" aria-hidden="true"><i class="skeleton-line skeleton-category"></i><i class="skeleton-line skeleton-title"></i><i class="skeleton-line skeleton-summary"></i><i class="skeleton-line skeleton-summary short"></i><div class="skeleton-footer"><i class="skeleton-avatar"></i><i class="skeleton-line skeleton-author"></i><i class="skeleton-line skeleton-stats"></i></div></div>
+          </div>
+          <div v-if="posts.length === 0 && (!loading || hasListSnapshot) && !loadError && !cursorExpired && !hotBlocked" class="empty-posts">
             <el-icon :size="48" color="#C9CDD4"><Document /></el-icon>
             <p>{{ hasMore ? '本页帖子已不可访问，可继续查看下一页' : '暂无帖子' }}</p>
           </div>
@@ -164,6 +169,7 @@
 import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import { useRouter, useRoute, onBeforeRouteLeave } from 'vue-router';
 import { forumFilters, forumQuery, forumFilterKey, readForumNavigation, saveForumNavigation } from '@/utils/forum-experience';
+import { forumFeedCache, forumFeedCacheRevision, invalidateForumFeedCache, type ForumFeedCacheQuery } from '@/utils/forum-feed-cache';
 import request from '@/utils/request';
 import { useUserStore } from '@/stores/user';
 import { ElMessage } from 'element-plus';
@@ -237,6 +243,7 @@ const canTrack = computed(() => !tagId.value && Array.from(searchText.value.trim
 const trackingKey = computed(() => JSON.stringify([sortBy.value, categoryId.value, searchText.value.trim(), hotPeriod.value, hotBasis.value]));
 const trackingHint = computed(() => tagId.value ? '标签筛选暂不支持追踪，可改用分类或关键词。' : !canTrack.value ? '追踪需有效的热榜窗口，关键词为空或 2～160 字符。' : '持续检查更新，默认每小时合并站内提醒；可在消息通知中暂停。');
 const loading = ref(false);
+const hasListSnapshot = ref(false), usingCachedSnapshot = ref(false), loadSlow = ref(false);
 const loadError = ref(false), hotPeriod = ref('week'), tagsExpanded = ref(false), container = ref<HTMLElement | null>(null);
 const mobileFiltersOpen = ref(false);
 const mobileFilterCount = computed(() => Number(!!categoryId.value) + Number(!!tagId.value));
@@ -249,6 +256,28 @@ const mobileFeedLabel = computed(() => sortBy.value === 'popular'
 let requestId = 0, restorePosition = false, initialLoad = true;
 let savedNavigation = readForumNavigation(userStore.user?.id || 0), cursorHistory: Record<string, string> = {};
 let historyKey = '', likesCountKey = '', likesTotal: number | null = null;
+let activeRead: AbortController | null = null;
+let slowTimer: ReturnType<typeof setTimeout> | null = null, cacheExpiryTimer: ReturnType<typeof setTimeout> | null = null;
+let displayedCacheExpiresAt = 0;
+let bypassNextLoad = false;
+function cancelRead() {
+  activeRead?.abort(); activeRead = null;
+  if (slowTimer) clearTimeout(slowTimer);
+  if (cacheExpiryTimer) clearTimeout(cacheExpiryTimer);
+  slowTimer = cacheExpiryTimer = null; loadSlow.value = false;
+}
+function cacheQuery(): ForumFeedCacheQuery {
+  // Typing a search is not a submission. A retry must retain the route's
+  // committed query rather than silently searching an unfinished input.
+  return { categoryId: categoryId.value, tagId: tagId.value, search: forumFilters(route.query).search, sortBy: sortBy.value,
+    hotBasis: hotBasis.value, hotPeriod: hotPeriod.value, pageSize: pageSize.value, page: page.value, cursor: cursor.value };
+}
+function clearListSnapshot() {
+  posts.value = []; hasListSnapshot.value = false; usingCachedSnapshot.value = false;
+  displayedCacheExpiresAt = 0;
+  hasMore.value = false; nextCursor.value = ''; coverageNote.value = ''; updatedAt.value = '';
+  hotStatus.value = ''; searchNote.value = ''; windowCountsNote.value = '';
+}
 const hasPreviousCursor = computed(() => sortBy.value === 'likes' || !!cursorHistory[String(page.value - 1)]);
 function savePosition() {
   if (route.path !== '/forum') return;
@@ -278,7 +307,7 @@ async function trackCurrent() {
 function applyFilters() { page.value = 1; cursor.value = ''; cursorHistory = {}; navigationNotice.value = ''; void navigate(); }
 function setCategory(id: string) { categoryId.value = id; applyFilters(); }
 function clearFilters() { categoryId.value = ''; tagId.value = ''; searchText.value = ''; applyFilters(); }
-function refreshFirst() { cursorHistory = {}; likesCountKey = ''; likesTotal = null; page.value = 1; cursor.value = ''; navigationNotice.value = ''; void navigate(); }
+function refreshFirst() { invalidateForumFeedCache(); bypassNextLoad = true; cursorHistory = {}; likesCountKey = ''; likesTotal = null; page.value = 1; cursor.value = ''; navigationNotice.value = ''; void navigate(); }
 function previousPage() {
   if (page.value <= 1) return;
   navigationNotice.value = '';
@@ -296,70 +325,143 @@ function nextPage() {
 async function navigate() {
   restorePosition = false;
   const target = { path: '/forum', query: routeQuery() };
-  if (router.resolve(target).fullPath === route.fullPath) { await loadPosts(); container.value?.scrollTo({ top: 0 }); }
+  if (router.resolve(target).fullPath === route.fullPath) {
+    const bypassCache = bypassNextLoad; bypassNextLoad = false;
+    await loadPosts({ bypassCache });
+  }
   else await router.push(target);
 }
 
-const loadPosts = async () => {
-  const stamp = ++requestId, account = userStore.user?.id;
-  loading.value = true;
-  loadError.value = false;
-  try {
-    const params: any = {
-      limit: pageSize.value,
-    };
-    if (sortBy.value === 'popular') { params.hotPeriod = hotPeriod.value; params.hotBasis = hotBasis.value; }
-    if (categoryId.value) params.categoryId = categoryId.value;
-    if (tagId.value) params.tagId = tagId.value;
-    if (searchText.value) params.search = searchText.value;
+function applyFeed(data: any, key: string, isLikes: boolean, cachedTotal: number | null = likesTotal) {
+  posts.value = data.data;
+  hasListSnapshot.value = true;
+  searchNote.value = data.degraded ? '搜索服务暂不可用，当前使用数据库关键词查询，匹配方式可能与全文搜索不同。' : '';
+  hotStatus.value = data.snapshot?.status || '';
+  windowCountsNote.value = data.snapshot?.windowCountsBasis === 'signed_net_deltas_since_activation'
+    ? '按窗口内已记录的互动净变化排名，取消点赞或删除评论可使净值减少；不补猜功能启用前的数据。卡片计数仍为快照时点累计数。' : '';
+  cursorExpired.value = false;
+  if (isLikes) {
+    if (typeof data.total === 'number') { likesTotal = data.total; likesCountKey = key; }
+    else if (cachedTotal !== null) { likesTotal = cachedTotal; likesCountKey = key; }
+    hasMore.value = page.value < 100 && posts.value.length === pageSize.value && (likesTotal === null || page.value * pageSize.value < likesTotal);
+    nextCursor.value = ''; updatedAt.value = '';
+    coverageNote.value = '点赞排序随互动变化，仅支持前 100 页；深度浏览请切换“最新”。';
+  } else {
+    hasMore.value = !!data.hasMore && !!data.nextCursor;
+    nextCursor.value = data.nextCursor || '';
+    if (data.pageCursor) { cursor.value = data.pageCursor; cursorHistory[String(page.value)] = data.pageCursor; }
+    updatedAt.value = data.snapshot?.asOf || data.asOf || '';
+    coverageNote.value = data.snapshot?.paging === 'first_page_only'
+      ? '当前热门筛选仅显示首屏；请收紧筛选或切换“最新”继续浏览。'
+      : data.snapshot ? '热榜为前 200 条排序快照，并非全站完整结果。' : '';
+  }
+}
 
-    const key = scopedFilterKey();
-    historyKey = key;
-    const isLikes = sortBy.value === 'likes';
+async function retryCurrentPage() {
+  // A manual retry replaces the in-flight read, keeping its exact signed page.
+  await loadPosts({ bypassCache: true, preserveScroll: true });
+}
+
+const loadPosts = async (options: { bypassCache?: boolean; preserveScroll?: boolean } = {}) => {
+  const scrollAtStart = container.value?.scrollTop || 0;
+  cancelRead();
+  const stamp = ++requestId, session = userStore.getAuthSession(), controller = new AbortController();
+  const isLikes = sortBy.value === 'likes', requestedQuery = cacheQuery();
+  const key = scopedFilterKey({ ...filters(), search: requestedQuery.search });
+  const scopeRevision = forumFeedCacheRevision(session);
+  const cached = options.bypassCache ? null : forumFeedCache.read(session, requestedQuery);
+  const restoreScroll = !options.preserveScroll && restorePosition && savedNavigation?.path === route.fullPath ? savedNavigation.scroll : null;
+  const keepScroll = options.preserveScroll || hasListSnapshot.value;
+  const isCurrent = () => stamp === requestId && route.path === '/forum' &&
+    session.userId === userStore.getAuthSession().userId && session.epoch === userStore.getAuthSession().epoch;
+  let completedScroll: number | null = null;
+  activeRead = controller;
+  historyKey = key;
+  loading.value = true;
+  loadError.value = false; cursorExpired.value = false;
+  if (cached) {
+    applyFeed(cached.value.data, key, isLikes, cached.value.likesTotal);
+    usingCachedSnapshot.value = true;
+    displayedCacheExpiresAt = cached.expiresAt;
+  }
+  if (usingCachedSnapshot.value) {
+    // A cache is a short head-start, not an indefinite permission snapshot.
+    // Retrying does not extend the original cached page's lifetime.
+    cacheExpiryTimer = setTimeout(() => {
+      if (!isCurrent() || !usingCachedSnapshot.value) return;
+      clearListSnapshot();
+      if (!loading.value) loadError.value = true;
+    }, Math.max(0, displayedCacheExpiresAt - Date.now()));
+  }
+  slowTimer = setTimeout(() => { if (isCurrent() && loading.value) loadSlow.value = true; }, 6000);
+  try {
+    await nextTick();
+    if (!isCurrent()) return;
+    if (cached || keepScroll) {
+      if (restoreScroll !== null) container.value?.scrollTo({ top: restoreScroll });
+      else if (keepScroll) container.value?.scrollTo({ top: scrollAtStart });
+    } else if (restoreScroll === null) container.value?.scrollTo({ top: 0 });
+    if (cached) restorePosition = false;
+    const params: any = {
+      limit: requestedQuery.pageSize,
+    };
+    if (requestedQuery.sortBy === 'popular') { params.hotPeriod = requestedQuery.hotPeriod; params.hotBasis = requestedQuery.hotBasis; }
+    if (requestedQuery.categoryId) params.categoryId = requestedQuery.categoryId;
+    if (requestedQuery.tagId) params.tagId = requestedQuery.tagId;
+    if (requestedQuery.search) params.search = requestedQuery.search;
+
     if (isLikes) {
-      params.page = page.value; params.sortBy = 'likes'; params.includeTotal = likesCountKey !== key;
+      params.page = requestedQuery.page; params.sortBy = 'likes'; params.includeTotal = likesCountKey !== key;
     } else {
-      params.sort = sortBy.value === 'popular' ? 'hot' : 'latest';
+      params.sort = requestedQuery.sortBy === 'popular' ? 'hot' : 'latest';
       if (cursor.value) params.cursor = cursor.value;
     }
-    const data = await request.get(isLikes ? '/forum/posts' : '/forum/feed', { params });
-    if (stamp !== requestId || account !== userStore.user?.id) return;
-    posts.value = data.data;
-    searchNote.value = data.degraded ? '搜索服务暂不可用，当前使用数据库关键词查询，匹配方式可能与全文搜索不同。' : '';
-    hotStatus.value = data.snapshot?.status || '';
-    windowCountsNote.value = data.snapshot?.windowCountsBasis === 'signed_net_deltas_since_activation'
-      ? '按窗口内已记录的互动净变化排名，取消点赞或删除评论可使净值减少；不补猜功能启用前的数据。卡片计数仍为快照时点累计数。' : '';
-    cursorExpired.value = false;
-    if (isLikes) {
-      if (typeof data.total === 'number') { likesTotal = data.total; likesCountKey = key; }
-      hasMore.value = page.value < 100 && posts.value.length === pageSize.value && (likesTotal === null || page.value * pageSize.value < likesTotal);
-      nextCursor.value = ''; updatedAt.value = '';
-      coverageNote.value = '点赞排序随互动变化，仅支持前 100 页；深度浏览请切换“最新”。';
-    } else {
-      hasMore.value = !!data.hasMore && !!data.nextCursor;
-      nextCursor.value = data.nextCursor || '';
-      if (data.pageCursor) { cursor.value = data.pageCursor; cursorHistory[String(page.value)] = data.pageCursor; }
-      updatedAt.value = data.snapshot?.asOf || data.asOf || '';
-      coverageNote.value = data.snapshot?.paging === 'first_page_only'
-        ? '当前热门筛选仅显示首屏；请收紧筛选或切换“最新”继续浏览。'
-        : data.snapshot ? '热榜为前 200 条排序快照，并非全站完整结果。' : '';
-      if (restorePosition && sortBy.value === 'popular' && !data.pageCursor) {
-        navigationNotice.value = '当前热门筛选不保留翻页快照，已重新加载首屏排序。';
-      }
+    const data = await request.get(isLikes ? '/forum/posts' : '/forum/feed', { params, signal: controller.signal, _quiet: true });
+    if (!isCurrent()) return;
+    if (scopeRevision !== forumFeedCacheRevision() || favoritePending.size || followPending.size) {
+      // A write finished while this read was in flight; its old social state
+      // must not replace the newer confirmed state already on screen.
+      if (!hasListSnapshot.value) loadError.value = true;
+      return;
     }
-    await nextTick();
-    if (restorePosition && savedNavigation?.path === route.fullPath) container.value?.scrollTo({ top: savedNavigation.scroll });
-    else container.value?.scrollTo({ top: 0 });
+    const scrollBeforeUpdate = container.value?.scrollTop || 0;
+    completedScroll = cached || keepScroll ? scrollBeforeUpdate : restoreScroll ?? 0;
+    applyFeed(data, key, isLikes);
+    usingCachedSnapshot.value = false; displayedCacheExpiresAt = 0;
+    if (cacheExpiryTimer) clearTimeout(cacheExpiryTimer); cacheExpiryTimer = null;
+    const snapshot = { data, likesTotal };
+    forumFeedCache.write(session, requestedQuery, snapshot, scopeRevision);
+    // First-page requests acquire a signed page token. Cache that exact token
+    // too, so a return from detail never opens a new snapshot behind the user.
+    forumFeedCache.write(session, { ...requestedQuery, cursor: isLikes ? '' : data.pageCursor || requestedQuery.cursor }, snapshot, scopeRevision);
+    if (restorePosition && sortBy.value === 'popular' && !data.pageCursor) {
+      navigationNotice.value = '当前热门筛选不保留翻页快照，已重新加载首屏排序。';
+    }
     restorePosition = false;
-    savePosition();
   } catch (error: any) {
-    if (stamp === requestId && account === userStore.user?.id) {
-      if (error.response?.status === 409 || (error.response?.status === 400 && cursor.value)) {
+    if (isCurrent() && error.code !== 'ERR_CANCELED' && error.code !== 'AUTH_SESSION_CHANGED') {
+      const status = error.response?.status;
+      if (status === 401 || status === 403 || status === 409 || (status === 400 && cursor.value)) {
+        invalidateForumFeedCache(); clearListSnapshot();
+      }
+      if (status === 409 || (status === 400 && cursor.value)) {
         cursorExpired.value = true; loadError.value = false; hasMore.value = false;
       } else loadError.value = true;
     }
   } finally {
-    if (stamp === requestId) loading.value = false;
+    if (stamp === requestId) {
+      // Measure at completion, not when the request started: the reader may
+      // have scrolled while waiting. Flush the status/error/slow-hint changes
+      // together before restoring, otherwise scroll anchoring shifts it again.
+      const settledScroll = completedScroll ?? (hasListSnapshot.value ? container.value?.scrollTop || 0 : null);
+      loading.value = false; loadSlow.value = false; activeRead = null;
+      if (slowTimer) clearTimeout(slowTimer); slowTimer = null;
+      await nextTick();
+      if (isCurrent() && settledScroll !== null) {
+        container.value?.scrollTo({ top: settledScroll });
+        savePosition();
+      }
+    }
   }
 };
 
@@ -401,16 +503,17 @@ watch(() => route.fullPath, async () => {
     await router.replace({ path: '/forum', query: routeQuery() });
     return;
   }
-  cursorExpired.value = false; hasMore.value = false; posts.value = []; coverageNote.value = ''; updatedAt.value = ''; hotStatus.value = ''; searchNote.value = ''; windowCountsNote.value = '';
-  void loadPosts();
+  cursorExpired.value = false; clearListSnapshot();
+  const bypassCache = bypassNextLoad; bypassNextLoad = false;
+  void loadPosts({ bypassCache });
 }, { immediate: true });
-watch(() => userStore.user?.id, () => {
+watch(() => { const session = userStore.getAuthSession(); return JSON.stringify([session.userId, session.epoch]); }, () => {
   socialEpoch++; favoritePending.clear(); followPending.clear();
-  requestId++; posts.value = []; cursorHistory = {}; likesCountKey = ''; likesTotal = null;
+  requestId++; cancelRead(); invalidateForumFeedCache(); clearListSnapshot(); cursorHistory = {}; likesCountKey = ''; likesTotal = null;
   savedNavigation = null; initialLoad = false; historyKey = ''; refreshFirst();
   trackingRequest++; tracking.value = false; trackedScopes.clear();
-});
-onBeforeRouteLeave(() => { savePosition(); requestId++; });
+}, { flush: 'sync' });
+onBeforeRouteLeave(() => { savePosition(); requestId++; cancelRead(); });
 onMounted(() => {
   mobileMedia = window.matchMedia('(max-width: 900px)');
   mobileMedia.addEventListener('change', closeDesktopFilters);
@@ -423,6 +526,7 @@ onMounted(() => {
 onUnmounted(() => {
   mobileMedia?.removeEventListener('change', closeDesktopFilters);
   requestId++;
+  cancelRead();
   trackingRequest++;
   if (tagTimer) clearInterval(tagTimer);
 });
@@ -587,6 +691,22 @@ onUnmounted(() => {
   flex-direction: column;
   gap: 12px;
 }
+.feed-loading-status, .feed-retry-notice { color: var(--text-secondary); font-size: 12px; line-height: 1.7; margin: 8px 0 12px; }
+.feed-retry-notice { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 12px; border-radius: var(--radius-sm); background: var(--primary-bg); }
+.feed-retry-notice .el-button { flex-shrink: 0; min-height: 36px; }
+.feed-skeleton { display: grid; gap: 12px; }
+.post-skeleton { padding: 20px 24px; border-radius: var(--radius-md); background: #fff; box-shadow: var(--shadow-sm); }
+.skeleton-line, .skeleton-avatar { display: block; background: #eef0f3; border-radius: 5px; }
+.skeleton-line { height: 12px; margin-bottom: 10px; }
+.skeleton-category { width: 68px; height: 16px; }
+.skeleton-title { width: 77%; height: 18px; margin: 14px 0; }
+.skeleton-summary { width: 100%; }
+.skeleton-summary.short { width: 64%; }
+.skeleton-footer { display: flex; align-items: center; gap: 8px; margin-top: 20px; }
+.skeleton-avatar { width: 24px; height: 24px; border-radius: 50%; flex-shrink: 0; }
+.skeleton-author { width: 72px; margin: 0; }
+.skeleton-stats { width: 28%; margin: 0 0 0 auto; }
+/* Static bars remain calm on slow connections, including reduced-motion mode. */
 
 .empty-posts {
   display: flex;
@@ -810,6 +930,9 @@ onUnmounted(() => {
   .mobile-filter-label { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; min-width: 0; flex: 1; }
   .filter-summary .el-button { min-height: 36px; flex-shrink: 0; }
   .post-card { padding: 16px; border-radius: 16px; }
+  .post-skeleton { padding: 16px; border: 1px solid #eee8ec; border-radius: 16px; box-shadow: none; }
+  .skeleton-footer { margin-top: 16px; }
+  .feed-retry-notice { gap: 8px; }
   .post-card-header { margin-bottom: 8px; }
   .post-title { line-height: 1.6; }
   .post-summary { margin-top: 6px; line-height: 1.65; }

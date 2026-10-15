@@ -2,6 +2,7 @@ import axios from 'axios';
 import { API_BASE, apiUrl, normalizeMedia } from './api';
 import { ElMessage } from 'element-plus';
 import { useUserStore } from '@/stores/user';
+import { invalidateForumFeedCache } from './forum-feed-cache';
 
 const http = axios.create({
   baseURL: API_BASE,
@@ -72,9 +73,16 @@ http.interceptors.response.use(
     const res = response.data;
     if (response.config.responseType === 'blob') return res;
     if (res.success) {
+      const method = (response.config.method || 'get').toLowerCase();
+      const path = response.config.url?.split('?')[0] || '';
+      if (!['get', 'head', 'options'].includes(method) &&
+        (/^\/forum\/posts(?:\/|$)/.test(path) && !path.endsWith('/view') ||
+          /^\/forum\/comments\/\d+$/.test(path) || /^\/users\/\d+\/follow$/.test(path))) {
+        invalidateForumFeedCache();
+      }
       return normalizeMedia(res.data);
     } else {
-      ElMessage.error(res.message || '请求失败');
+      if (!(response.config as any)._quiet) ElMessage.error(res.message || '请求失败');
       return Promise.reject(new Error(res.message || '请求失败'));
     }
   },
@@ -83,6 +91,7 @@ http.interceptors.response.use(
     const session = originalRequest?._authSession as AuthSession | undefined;
     if (session && !sessionMatches(session)) return Promise.reject(sessionChanged());
     if (error.code === 'AUTH_SESSION_CHANGED') return Promise.reject(error);
+    if (error.code === 'ERR_CANCELED' || axios.isCancel?.(error)) return Promise.reject(error);
     if (error.response?.data instanceof Blob) {
       try { error.response.data = JSON.parse(await error.response.data.text()); } catch { /* safe generic error below */ }
     }
@@ -106,6 +115,8 @@ http.interceptors.response.use(
         originalRequest.headers.Authorization = `Bearer ${token}`;
         return http(originalRequest);
       } catch (refreshError) { return Promise.reject(refreshError); }
+    } else if (originalRequest?._quiet) {
+      // Background reads own their inline recovery UI. Authentication handling above remains active.
     } else if (error.response?.data?.message) {
       ElMessage.error(error.response.data.message);
     } else {
