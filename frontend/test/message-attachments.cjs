@@ -73,9 +73,9 @@ const vue=require('vue');
 const deferred=()=>{let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return{promise,resolve,reject};};
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 function draftConversation(id=11,userId=7){return{id,userId,title:'Synthetic fixture',conversationType:'ASSISTANT',personaKey:'assistant'};}
-function chatRecoveryFixture({acceptImmediately=true,knowledgeBaseId=0}={}){
+function chatRecoveryFixture({acceptImmediately=true,knowledgeBaseId=0,perConversationRuns=false}={}){
  let epoch=3,admission,sentArguments;
- const run=deferred(),errors=[],request={get:async path=>path.startsWith('/coding/')?{files:[attachment]}:[]};
+ const run=deferred(),runs=[],sentCalls=[],running=vue.reactive(new Set()),errors=[],request={get:async path=>path.startsWith('/coding/')?{files:[attachment]}:[]};
  const store=vue.reactive({currentConversation:draftConversation(),conversations:[draftConversation()],navigation:{userId:7,space:'ASSISTANT',conversationId:11,scroll:{}},
   messages:[],drafts:{},draftAttachments:{11:[{...attachment}]},failedAttempts:{},isStreaming:false,isLoadingConversation:false,
   llmConfig:{models:[{id:'fixture-model',available:true}],defaultModelId:'fixture-model'},
@@ -83,8 +83,11 @@ function chatRecoveryFixture({acceptImmediately=true,knowledgeBaseId=0}={}){
   getConversationSettings(){return{agentMode:'normal',knowledgeBaseId,codingEnabled:false};},saveConversationSettings(){},
   saveView(id,scroll,draft){this.drafts[id]=draft;},loadDefaultConfig:async()=>{},loadConversations:async()=>{},
   async selectConversation(conversation){this.currentConversation=conversation;},clearSelection(){this.currentConversation=null;},
-  sendConfigured(...args){sentArguments=args;this.isStreaming=true;admission=args[8]?.onAccepted;if(acceptImmediately)admission?.();return run.promise.finally(()=>{this.isStreaming=false;});},
+  sendConfigured(...args){sentArguments=args;sentCalls.push(args);const cid=this.currentConversation.id,wait=runs.length&&perConversationRuns?deferred():run;runs.push(wait);
+   if(perConversationRuns)running.add(cid);else this.isStreaming=true;admission=args[8]?.onAccepted;if(acceptImmediately)admission?.();
+   return wait.promise.finally(()=>{if(perConversationRuns)running.delete(cid);else this.isStreaming=false;});},
  });
+ if(perConversationRuns)Object.defineProperty(store,'isStreaming',{get:()=>running.has(store.currentConversation?.id),configurable:true});
  const user=vue.reactive({user:{id:7,username:'Fixture'},getAuthSession:()=>({userId:user.user?.id??null,epoch})});
  const navigationModule={exports:{}};
  new Function('module','exports',ts.transpileModule(readFileSync(join(__dirname,'../src/utils/chat-navigation.ts'),'utf8'),{
@@ -101,7 +104,7 @@ function chatRecoveryFixture({acceptImmediately=true,knowledgeBaseId=0}={}){
    '@/utils/forum-links':{},marked:{marked:{}},dompurify:{},dayjs:()=>({format:()=>''}),
   };
   const script=readFileSync(join(__dirname,'../src/views/Chat.vue'),'utf8').match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1];
-  const code=ts.transpileModule(script+'\nexport {handleSendMessage,retryFailedAnswer,inputText};',{
+  const code=ts.transpileModule(script+'\nexport {handleSendMessage,retryFailedAnswer,continueAnswer,inputText};',{
    compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;
   const mod={exports:{}};
   scope.run(()=>new Function('require','module','exports','window',code)(name=>{
@@ -111,7 +114,7 @@ function chatRecoveryFixture({acceptImmediately=true,knowledgeBaseId=0}={}){
   },mod,mod.exports,{matchMedia:()=>({matches:false}),addEventListener(){},removeEventListener(){}}));
   return{...mod.exports,mount:async()=>{for(const fn of mounted)await fn();await tick();},unmount(){for(const fn of unmounted)fn();scope.stop();}};
  }
- return{store,user,run,errors,view,sentArguments:()=>sentArguments,accept:()=>admission?.(),switchSession(id){epoch++;user.user=id?{id,username:'Fixture '+id}:null;store.navigation.userId=id??0;}};
+ return{store,user,run,runs,sentCalls,errors,view,sentArguments:()=>sentArguments,accept:()=>admission?.(),switchSession(id){epoch++;user.user=id?{id,username:'Fixture '+id}:null;store.navigation.userId=id??0;}};
 }
 
 test('ordinary AI does not send an obsolete saved novel knowledge base with an attachment',async()=>{
@@ -180,7 +183,39 @@ test('retry button preserves newer drafts and only explicitly resubmits the matc
  f.run.resolve(true);await sending;active.unmount();
 });
 
-function durableStoreFixture(){
+test('Chat.vue allows a second conversation to send while the first view handler awaits generation',async()=>{
+ const f=chatRecoveryFixture({perConversationRuns:true}),active=f.view();await active.mount();active.inputText.value='Question A';
+ const first=active.handleSendMessage();await tick();assert.equal(f.sentCalls.length,1);
+ const other=draftConversation(12);f.store.conversations.push(other);f.store.currentConversation=other;f.store.navigation.conversationId=12;await tick();
+ active.inputText.value='Question B';const second=active.handleSendMessage();await tick();
+ assert.equal(f.sentCalls.length,2,'A waiting handler cannot lock the B composer');assert.equal(f.sentCalls[1][0],'Question B');
+ f.runs[0].resolve(false);await first;assert.equal(f.store.isStreaming,true,'A finishing cannot clear B running state');
+ assert.equal(f.store.currentConversation.id,12);assert.equal(active.inputText.value,'');
+ f.runs[1].resolve(true);await second;active.unmount();assert.deepEqual(f.errors,[]);
+});
+
+test('incomplete file delivery requires a user-triggered full regeneration request instead of appending broken code',async()=>{
+ for(const fileIncomplete of [true,false]){
+  const f=chatRecoveryFixture(),active=f.view();await active.mount();f.store.draftAttachments[11]=[];
+  const message={id:200,role:'assistant',content:'Previous output',ragMetadata:{generation:{truncated:true,canContinue:true,fileIncomplete,filePaths:['demo.html']}}};
+  f.store.messages=[message];assert.equal(f.sentArguments(),undefined,'Showing a continuation action must not start a task');
+  const continuing=active.continueAnswer(message);await tick();
+  assert.equal(f.sentCalls.length,1);
+  assert.equal(f.sentArguments()[0],fileIncomplete?'请根据原需求，重新生成一个完整、精简的可下载文件。':'请继续上一条回答，从中断处接着写，不要重复已经输出的内容。');
+  f.run.resolve(true);await continuing;active.unmount();assert.deepEqual(f.errors,[]);
+ }
+});
+
+test('file regeneration cannot replace a newer draft and is unavailable to roleplay or a non-continuable answer',async()=>{
+ const f=chatRecoveryFixture(),active=f.view();await active.mount();f.store.draftAttachments[11]=[];
+ const message={id:200,role:'assistant',content:'Previous output',ragMetadata:{generation:{truncated:true,canContinue:true,fileIncomplete:true}}};f.store.messages=[message];
+ active.inputText.value='Keep my newer draft';await active.continueAnswer(message);assert.equal(f.sentCalls.length,0);assert.equal(active.inputText.value,'Keep my newer draft');
+ active.inputText.value='';message.ragMetadata.generation.canContinue=false;await active.continueAnswer(message);assert.equal(f.sentCalls.length,0);
+ message.ragMetadata.generation.canContinue=true;f.store.currentConversation={...draftConversation(),conversationType:'ROLEPLAY',personaKey:'kato_megumi_persona'};await tick();
+ await active.continueAnswer(message);assert.equal(f.sentCalls.length,0);active.unmount();
+});
+
+function durableStoreFixture({createWait}={}){
  const persisted=[],requests=[],waiters=[],saved=new Map();let runNumber=0,recoveredState={status:'RUNNING'};
  const original=draftConversation(),other=draftConversation(12);
  const request={get:async path=>{
@@ -188,13 +223,15 @@ function durableStoreFixture(){
   if(path==='/chat/conversations')return[original,other];
   if(path.startsWith('/chat/runs/'))return recoveredState;
   return saved.get(Number(path.split('/')[3]))||[];
- },post:async(path,input)=>{requests.push(['post',path,input]);return{id:'run-'+(++runNumber),status:'RUNNING'};},delete:async path=>requests.push(['delete',path])};
+ },post:async(path,input)=>{requests.push(['post',path,input]);
+  if(path==='/chat/conversations')return createWait?createWait.promise:draftConversation(13);
+  return{id:'run-'+(++runNumber),status:'RUNNING'};},delete:async path=>requests.push(['delete',path])};
  const storage={getItem:()=>null,setItem:(...args)=>persisted.push(args),removeItem(){}};
  const navigationModule={exports:{}};
  new Function('module','exports',ts.transpileModule(readFileSync(join(__dirname,'../src/utils/chat-navigation.ts'),'utf8'),{
   compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(navigationModule,navigationModule.exports);
  const imports={pinia:{defineStore:(_name,setup)=>()=>vue.reactive(setup())},vue, '@/utils/request':request,
-  '@/utils/chat-stream':{watchChatRun:(_id,_signal,onDelta,onProgress)=>{const wait=deferred();waiters.push({...wait,onDelta,onProgress});return wait.promise;}},
+  '@/utils/chat-stream':{watchChatRun:(id,signal,onDelta,onProgress)=>{const wait=deferred();waiters.push({...wait,id,signal,onDelta,onProgress});return wait.promise;}},
   '@/utils/local-workspace':{disconnectLocalWorkspace(){}},'@/utils/chat-navigation':navigationModule.exports,
   '@/utils/chat-files':load(request),'@/utils/chat-model-selection':{selectedChatModel:()=> 'fixture-model'},
   '@/utils/roleplay-defaults':roleplayDefaultsModule.exports};
@@ -265,4 +302,59 @@ test('late failed run from an expired account epoch cannot remove the new accoun
  assert.deepEqual(Object.keys(f.store.failedAttempts),[]);f.waiters[1].resolve({status:'CANCELLED'});await next;
  assert.equal(f.store.messages[1].failure.cancelled,true);assert.equal(f.store.messages[1].failure.retryable,true);
  f.store.dismissFailedAttempt(21);assert.deepEqual(f.store.messages,[]);
+});
+
+test('different conversations stream concurrently, retain only their own pending turns, and stop independently',async()=>{
+ const f=durableStoreFixture(),first=f.store.sendMessage('Question A');await tick();
+ assert.equal(f.store.isStreaming,true);assert.equal(await f.store.sendMessage('Duplicate A'),false);
+ f.waiters[0].onProgress({elapsedMs:1000});f.waiters[0].onDelta('A partial');
+ await f.store.selectConversation(f.other);assert.equal(f.store.isStreaming,false);assert.equal(f.store.abortController,null);
+ assert.equal(f.waiters[0].signal.aborted,false);const second=f.store.sendMessage('Question B');await tick();
+ assert.equal(f.waiters.length,2);assert.equal(f.store.isStreaming,true);
+ f.waiters[0].onDelta(' background');f.waiters[1].onDelta('B partial');
+ assert.deepEqual(f.store.messages.map(message=>message.content),['Question B','B partial']);
+ await f.store.selectConversation(f.original);
+ assert.deepEqual(f.store.messages.map(message=>message.content),['Question A','A partial background']);
+ assert.equal(f.store.messages[1].ragMetadata.performance.elapsedMs,1000);
+ f.store.stopGeneration();assert.equal(f.waiters[0].signal.aborted,true);assert.equal(f.waiters[1].signal.aborted,false);
+ assert(f.requests.some(([method,path])=>method==='delete'&&path==='/chat/runs/run-1'));
+ assert(!f.requests.some(([method,path])=>method==='delete'&&path==='/chat/runs/run-2'));
+ await f.store.selectConversation(f.other);f.waiters[0].resolve({status:'CANCELLED'});await first;
+ assert.equal(f.store.currentConversation.id,12);assert.equal(f.store.isStreaming,true);
+ assert.deepEqual(f.store.messages.map(message=>message.content),['Question B','B partial']);
+ f.saved.set(12,[{id:31,role:'USER',content:'Question B',conversationId:12},{id:32,role:'ASSISTANT',content:'B complete',conversationId:12}]);
+ f.waiters[1].resolve({status:'COMPLETED',result:{content:'B complete'}});assert.equal(await second,true);
+ assert.equal(f.store.isStreaming,false);await f.store.selectConversation(f.original);
+ assert.equal(f.store.messages[0].content,'Question A');assert.equal(f.store.messages[1].failure.cancelled,true);
+ assert.equal(f.requests.filter(([method])=>method==='post').length,2);
+});
+
+test('deleting a background conversation cancels that run without blocking or cancelling the selected conversation',async()=>{
+ const f=durableStoreFixture(),first=f.store.sendMessage('Deleted A');await tick();await f.store.selectConversation(f.other);
+ const second=f.store.sendMessage('Keep B');await tick();await f.store.deleteConversation(11);
+ assert.equal(f.waiters[0].signal.aborted,true);assert.equal(f.waiters[1].signal.aborted,false);
+ assert.equal(f.store.currentConversation.id,12);assert.equal(f.store.isStreaming,true);
+ f.waiters[0].resolve({status:'CANCELLED'});await first;assert(!f.store.failedAttempts[11]);
+ f.waiters[1].resolve({status:'CANCELLED'});await second;
+});
+
+test('account reset aborts every conversation reader and late results cannot revive any old pending turn',async()=>{
+ const f=durableStoreFixture(),first=f.store.sendMessage('A old');await tick();await f.store.selectConversation(f.other);
+ const second=f.store.sendMessage('B old');await tick();f.store.resetForUser();
+ assert(f.waiters.every(wait=>wait.signal.aborted));assert.equal(f.store.isStreaming,false);assert.equal(f.store.abortController,null);
+ f.waiters[0].resolve({status:'FAILED',error:'old'});f.waiters[1].resolve({status:'COMPLETED',result:{content:'old'}});await Promise.all([first,second]);
+ assert.deepEqual(f.store.messages,[]);assert.deepEqual(Object.keys(f.store.failedAttempts),[]);
+ assert.equal(f.store.currentConversation,null);
+});
+
+test('creating a new conversation cannot redirect an in-flight send into a subsequently selected conversation',async()=>{
+ const createWait=deferred(),f=durableStoreFixture({createWait});f.store.clearSelection();
+ const created=f.store.sendMessage('New conversation A');await tick();assert.equal(f.store.isStreaming,true);
+ assert.equal(await f.store.sendMessage('Duplicate blank send'),false);
+ await f.store.selectConversation(f.other);assert.equal(f.store.isStreaming,false);
+ const existing=f.store.sendMessage('Existing conversation B');await tick();
+ createWait.resolve(draftConversation(13));await tick();
+ assert.equal(f.store.currentConversation.id,12);assert.deepEqual(f.store.messages.map(message=>message.content),['Existing conversation B','']);
+ assert.deepEqual(f.requests.filter(([method,path])=>method==='post'&&path==='/chat/runs').map(([, ,input])=>input.conversationId),[12,13]);
+ assert.equal(f.waiters.length,2);f.store.resetForUser();f.waiters.forEach(wait=>wait.resolve({status:'CANCELLED'}));await Promise.all([created,existing]);
 });

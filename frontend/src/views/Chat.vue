@@ -182,7 +182,7 @@
                 </div>
               </div>
               <div v-else-if="msg.content || msg.role!=='user'" class="message-bubble" :class="[msg.role, { 'thinking-bubble': msg.pending && !msg.content }]">
-                <span v-if="msg.pending && !msg.content" class="typing-indicator" role="status" aria-label="正在思考"></span>
+                <span v-if="msg.pending && !msg.content" class="typing-indicator" role="status" aria-label="正在思考"><span></span><span></span><span></span></span>
                 <template v-else>
                 <div v-if="hasToolResults(msg.content)" class="tool-results">
                   <div v-for="(result, idx) in getToolResults(msg.content)" :key="idx" class="tool-result-item">
@@ -783,9 +783,10 @@ const handleNewChat = async () => {
   scrollToBottom();
 };
 
-let sendingLock = false;
+const sendingLocks = new Set<number | 'new'>();
+const currentSendLocked = () => sendingLocks.has(chatStore.currentConversation?.id ?? 'new');
 const retryFailedAnswer = async (message: any) => {
-  if (sendingLock || chatStore.isStreaming || uploadingFiles.value || message.conversationId !== chatStore.currentConversation?.id) return;
+  if (currentSendLocked() || chatStore.isStreaming || uploadingFiles.value || message.conversationId !== chatStore.currentConversation?.id) return;
   const attempt = chatStore.failedAttempts[message.conversationId];
   if (!attempt || attempt.reply.id !== message.id || !attempt.reply.failure?.retryable) return;
   const text = attempt.question.content, files: ChatFile[] = attempt.question.ragMetadata?.messageAttachments || [];
@@ -801,15 +802,19 @@ const continueAnswer = async (message: any) => {
     if (!chatStore.isStreaming) ElMessage.info('请先发送或清空当前草稿，再继续生成');
     return;
   }
+  const generation = message.ragMetadata?.generation;
+  if (!generation?.truncated || !generation?.canContinue) return;
   const answers = chatStore.messages.filter(m => m.role === 'assistant');
   if (answers[answers.length - 1]?.id !== message.id) {
     ElMessage.info('请在输入框说明要续写哪条回答'); return;
   }
-  inputText.value = '请继续上一条回答，从中断处接着写，不要重复已经输出的内容。';
+  inputText.value = generation.fileIncomplete
+    ? '请根据原需求，重新生成一个完整、精简的可下载文件。'
+    : '请继续上一条回答，从中断处接着写，不要重复已经输出的内容。';
   await handleSendMessage();
 };
 const handleSendMessage = async () => {
-  if (sendingLock || uploadingFiles.value || chatStore.isStreaming || isLegacy.value) return;
+  if (currentSendLocked() || uploadingFiles.value || chatStore.isStreaming || isLegacy.value) return;
   const text = inputText.value.trim();
   if (!text && !pendingFiles.value.length) return;
   if (!selectedModel.value?.available) { ElMessage.warning('请选择可用模型'); return; }
@@ -822,12 +827,16 @@ const handleSendMessage = async () => {
 
   const sendingSession = userStore.getAuthSession();
   const ownsSendingSession = () => sameDraftSession(sendingSession, userStore.getAuthSession(), chatStore.navigation.userId);
-  sendingLock = true;
+  let sendingLockKey: number | 'new' = chatStore.currentConversation?.id ?? 'new';
+  sendingLocks.add(sendingLockKey);
   try {
     if (!chatStore.currentConversation && isAssistant.value) await ensureAssistantConversation();
     if (!ownsSendingSession() || !ownsView()) throw new Error('登录状态或页面已切换，请重新发送');
+    if (sendingLockKey === 'new' && chatStore.currentConversation) {
+      sendingLocks.delete(sendingLockKey); sendingLockKey = chatStore.currentConversation.id; sendingLocks.add(sendingLockKey);
+    }
   }
-  catch (e: any) { sendingLock = false; if (ownsSendingSession() && ownsView()) ElMessage.error(e.message || '创建会话失败'); return; }
+  catch (e: any) { sendingLocks.delete(sendingLockKey); if (ownsSendingSession() && ownsView()) ElMessage.error(e.message || '创建会话失败'); return; }
   inputText.value = '';
   const sendingConversationId = chatStore.currentConversation?.id;
   const sendingFiles=isAssistant.value?[...pendingFiles.value]:[];
@@ -864,11 +873,11 @@ const handleSendMessage = async () => {
     if(!completed)restoreDraft();
   } catch (e: any) {
     restoreDraft();
-    if (ownsSendingSession() && ownsView()) ElMessage.error(e.message || '发送失败');
+    if (ownsSendingSession() && ownsView() && chatStore.currentConversation?.id === sendingConversationId) ElMessage.error(e.message || '发送失败');
   } finally {
-    sendingLock = false;
+    sendingLocks.delete(sendingLockKey);
   }
-  scrollToBottom();
+  if (ownsView() && chatStore.currentConversation?.id === sendingConversationId) scrollToBottom();
 };
 
 const buildCustomSystemPrompt = () => {
@@ -1387,9 +1396,7 @@ onMounted(async () => {
   color: #E8A0BF;
 }
 
-.chat-main.persona-theme .typing-indicator,
-.chat-main.persona-theme .typing-indicator::before,
-.chat-main.persona-theme .typing-indicator::after {
+.chat-main.persona-theme .typing-indicator > span {
   background: #E8A0BF;
 }
 
@@ -1716,19 +1723,14 @@ onMounted(async () => {
 }
 
 .typing-indicator {
-  display: inline-block;
-  position: relative;
-  width: 8px;
+  display: inline-flex;
+  flex: none;
+  gap: 8px;
+  width: 40px;
   height: 8px;
-  background: var(--primary-color);
-  border-radius: 50%;
-  animation: typing 1.4s infinite ease-in-out;
 
-  &::before,
-  &::after {
-    content: '';
-    position: absolute;
-    top: 0;
+  > span {
+    flex: none;
     width: 8px;
     height: 8px;
     background: var(--primary-color);
@@ -1736,13 +1738,11 @@ onMounted(async () => {
     animation: typing 1.4s infinite ease-in-out;
   }
 
-  &::before {
-    left: -16px;
+  > span:first-child {
     animation-delay: -0.32s;
   }
 
-  &::after {
-    left: 16px;
+  > span:last-child {
     animation-delay: 0.32s;
   }
 }
@@ -2190,4 +2190,9 @@ onMounted(async () => {
   // leaves little room above it. This depends on viewport size, not focus.
   .assistant-welcome .welcome-copy, .assistant-welcome .assistant-suggestions { display: none; }
 }
+// Keep the entire waiting indicator inside the same content gutter as its status row.
+.chat-main .chat-message.assistant .message-bubble.thinking-bubble {
+  box-sizing: border-box; min-height: 32px; padding: 12px 8px; border: 0; background: transparent; box-shadow: none;
+}
+@media (prefers-reduced-motion: reduce) { .typing-indicator > span { animation: none; } }
 </style>

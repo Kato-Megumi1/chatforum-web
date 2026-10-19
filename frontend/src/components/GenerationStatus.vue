@@ -27,7 +27,7 @@
       <span v-if="view.elapsedMs !== null" class="process-elapsed">总用时 {{ seconds(view.elapsedMs) }} 秒</span>
     </span>
     <span v-if="pending" class="process-announcement" role="status">{{ view.label }}</span>
-    <button v-if="!pending && generation?.truncated && generation?.canContinue" class="continue-generation" :disabled="busy" @click="$emit('continue')">继续生成</button>
+    <button v-if="!pending && generation?.truncated && generation?.canContinue" class="continue-generation" :disabled="busy" @click="$emit('continue')">{{ continuationLabel }}</button>
   </div>
 </template>
 <script setup lang="ts">
@@ -35,7 +35,8 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import type { GenerationProgress } from '@/utils/chat-stream';
 import { generationProcessView, generationSeconds as seconds } from '@/utils/generation-process';
 const props = defineProps<{ pending?: boolean; busy?: boolean; progress?: GenerationProgress;
-  generation?: {truncated: boolean; canContinue: boolean}; allowThinking?: boolean }>();
+  generation?: {truncated: boolean; canContinue: boolean; fileIncomplete?: boolean; filePaths?: string[]}; allowThinking?: boolean }>();
+const continuationLabel = computed(() => props.generation?.fileIncomplete ? '重新生成文件' : '继续生成');
 defineEmits<{ continue: [] }>();
 const sampledAt = ref(Date.now()), now = ref(sampledAt.value), frozenExtension = ref(0);
 let mounted = false, timer: ReturnType<typeof setInterval> | undefined;

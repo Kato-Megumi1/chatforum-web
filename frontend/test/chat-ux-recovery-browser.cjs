@@ -10,9 +10,12 @@ assert(['127.0.0.1', 'localhost'].includes(new URL(base).hostname));
 const output = join(__dirname, '../../.local/chat-ux-review'); mkdirSync(output, { recursive: true });
 const testKinds = (process.env.CHAT_UX_TEST_KINDS || 'ASSISTANT,ROLEPLAY').split(',');
 assert(testKinds.length && testKinds.every(kind => ['ASSISTANT', 'ROLEPLAY'].includes(kind)));
+const testFocus = process.env.CHAT_UX_TEST_FOCUS || 'all';
+assert(['all', 'parallel', 'typing'].includes(testFocus));
 const viewer = { id: 99231, username: '虚构体验测试', email: 'synthetic@example.test', role: 'USER' };
 const conversations = [
   { id: 12001, title: '合成普通对话', conversationType: 'ASSISTANT' },
+  { id: 12003, title: '合成并行对话', conversationType: 'ASSISTANT' },
   { id: 12002, title: '合成角色对话', conversationType: 'ROLEPLAY', personaKey: 'kato_megumi_persona', personaLabel: '加藤惠' },
 ].map(row => ({ ...row, userId: viewer.id, updatedAt: '2026-10-19T01:00:00Z' }));
 const gate = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
@@ -30,6 +33,21 @@ const performance = phase => ({ stage: phase === 'completed' ? 'completed' : pha
     { phase: 'queued', durationMs: 200, modelCalls: 0 }, { phase: 'context', durationMs: 1800, modelCalls: 0 },
     { phase, durationMs: 45000, modelCalls: 2 },
   ], reasoning_content: 'PRIVATE_REASONING_MUST_NOT_APPEAR', prompt: 'PRIVATE_PROMPT_MUST_NOT_APPEAR' });
+
+async function assertTypingGeometry(page) {
+  const geometry = await page.locator('.typing-indicator').evaluate(indicator => {
+    const bubble = indicator.closest('.thinking-bubble'), body = indicator.closest('.message-body');
+    const box = element => { const rect = element.getBoundingClientRect(); return { left: rect.left, right: rect.right, width: rect.width }; };
+    return { dots: [...indicator.children].map(box), holder: box(indicator), bubble: box(bubble), body: box(body),
+      status: box(body.querySelector('.generation-status .process-indicator')),
+      pseudoBefore: getComputedStyle(indicator, '::before').content, pseudoAfter: getComputedStyle(indicator, '::after').content };
+  });
+  assert.equal(geometry.dots.length, 3, 'Three real dots participate in layout');
+  assert.equal(geometry.pseudoBefore, 'none'); assert.equal(geometry.pseudoAfter, 'none');
+  assert(geometry.dots.every(dot => dot.width === 8 && dot.left >= geometry.body.left + 7 && dot.right <= geometry.bubble.right + 1), 'All dots stay inside the message content gutter');
+  assert(Math.abs(geometry.dots[0].left - geometry.status.left) <= 1, 'The first waiting dot aligns with the status indicator');
+  assert.equal(geometry.dots[1].left - geometry.dots[0].left, 16); assert.equal(geometry.dots[2].left - geometry.dots[1].left, 16);
+}
 
 async function fixture(browser, width, kind, libraryMode = 'ready') {
   const page = await browser.newPage({ viewport: { width, height: 844 }, isMobile: width <= 900, hasTouch: width <= 900, reducedMotion: 'reduce' });
@@ -53,7 +71,10 @@ async function fixture(browser, width, kind, libraryMode = 'ready') {
     if (method === 'OPTIONS') return route.fulfill({ status: 204, headers: { ...headers, 'Access-Control-Allow-Headers': '*', 'Access-Control-Allow-Methods': '*' } });
     if (path === '/api/chat/config') return json({ configured: true, defaultModelId: 'qwen3.8-max', models: [{ id: 'qwen3.8-max', label: 'Qwen3.8-Max', available: true }] });
     if (path === '/api/chat/conversations') return json(conversations);
-    if (/\/chat\/conversations\/\d+\/messages$/.test(path)) return json(state.messages);
+    if (/\/chat\/conversations\/\d+\/messages$/.test(path)) {
+      const conversationId = Number(path.split('/')[4]);
+      return json(state.messages.filter(message => message.conversationId === conversationId));
+    }
     if (path === '/api/rag/knowledge-bases') {
       if (libraryMode === 'slow') await state.library.promise;
       return json([{ id: 73, name: '路人女主 · 加藤惠的原作记忆', permission: 'READER',
@@ -76,7 +97,8 @@ async function fixture(browser, width, kind, libraryMode = 'ready') {
     if (run && method === 'DELETE') { run.status = 'CANCELLED'; run.finish.resolve(); return json({ id: run.id, status: run.status }); }
     if (run && path.endsWith('/events')) {
       const sse = body => route.fulfill({ contentType: 'text/event-stream', headers, body }).catch(() => undefined);
-      if (!run.reads++) return sse('event: progress\ndata: ' + JSON.stringify(performance(kind === 'ROLEPLAY' ? 'verifying' : 'generating')) + '\n\n');
+      const runKind = run.input.conversationId === 12002 ? 'ROLEPLAY' : 'ASSISTANT';
+      if (!run.reads++) return sse('event: progress\ndata: ' + JSON.stringify(performance(runKind === 'ROLEPLAY' ? 'verifying' : 'generating')) + '\n\n');
       await run.finish.promise;
       if (run.status === 'CANCELLED') return sse('event: terminal\ndata: {"status":"CANCELLED"}\n\n');
       if (run.outcome === 'failure') {
@@ -84,12 +106,14 @@ async function fixture(browser, width, kind, libraryMode = 'ready') {
           result: { failure: { code: 'MODEL_REQUEST_TIMEOUT', message: '合成模型等待超时，请重新发送。' } } }) + '\n\n');
       }
       run.status = 'COMPLETED';
-      const content = kind === 'ROLEPLAY' ? '嗯，那就随便聊聊吧。你今天有没有碰到什么有意思的事？' : '联网暂时不可用，本轮没有获取到新的公开资料。';
-      const metadata = { state: kind === 'ROLEPLAY' ? 'roleplay' : 'general', performance: performance('completed'),
-        responseOptions: { deepThinking: kind === 'ASSISTANT', webSearch: kind === 'ASSISTANT' },
-        ...(kind === 'ASSISTANT' ? { webSearch: { enabled: true, sources: [], failure: 'SEARCH_UNAVAILABLE' } } : {}) };
-      state.messages.push({ id: state.messages.length + 1, role: 'USER', conversationId: cid, content: run.input.question },
-        { id: state.messages.length + 2, role: 'ASSISTANT', conversationId: cid, content, ragMetadata: metadata });
+      const searchEnabled = runKind === 'ASSISTANT' && run.input.webSearch === true;
+      const content = runKind === 'ROLEPLAY' ? '嗯，那就随便聊聊吧。你今天有没有碰到什么有意思的事？'
+        : searchEnabled ? '联网暂时不可用，本轮没有获取到新的公开资料。' : '这是一条合成回答。';
+      const metadata = { state: runKind === 'ROLEPLAY' ? 'roleplay' : 'general', performance: performance('completed'),
+        responseOptions: { deepThinking: runKind === 'ASSISTANT', webSearch: searchEnabled },
+        ...(searchEnabled ? { webSearch: { enabled: true, sources: [], failure: 'SEARCH_UNAVAILABLE' } } : {}) };
+      state.messages.push({ id: state.messages.length + 1, role: 'USER', conversationId: run.input.conversationId, content: run.input.question },
+        { id: state.messages.length + 2, role: 'ASSISTANT', conversationId: run.input.conversationId, content, ragMetadata: metadata });
       return sse('event: delta\ndata: ' + JSON.stringify({ text: content, offset: content.length }) + '\n\nevent: complete\ndata: ' +
         JSON.stringify({ status: 'COMPLETED', result: { content, ragMetadata: metadata } }) + '\n\n');
     }
@@ -99,7 +123,7 @@ async function fixture(browser, width, kind, libraryMode = 'ready') {
   });
   await page.goto(base + 'chat'); await page.locator('.chat-layout').waitFor();
   const waitSelected = id => page.waitForFunction(id => {
-    const store = document.querySelector('#app').__vue_app__.config.globalProperties.$pinia._s.get('chat');
+    const store = document.querySelector('#app')?.__vue_app__?.config.globalProperties.$pinia._s.get('chat');
     return store?.currentConversation?.id === id && !store.isLoadingConversation;
   }, id);
   await waitSelected(12001);
@@ -110,10 +134,11 @@ async function fixture(browser, width, kind, libraryMode = 'ready') {
     await waitSelected(12002);
   }
   const textbox = page.locator('.chat-textarea textarea');
-  const busy = value => page.waitForFunction(value => document.querySelector('#app').__vue_app__.config.globalProperties.$pinia._s.get('chat').isStreaming === value, value);
+  const busy = value => page.waitForFunction(value => document.querySelector('#app')?.__vue_app__?.config.globalProperties.$pinia._s.get('chat')?.isStreaming === value, value);
   const capture = async name => {
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'No horizontal page overflow');
     assert(!(await page.locator('body').innerText()).includes('PRIVATE_'), 'No raw reasoning/system text in UI');
+    await page.waitForFunction(() => [...document.querySelectorAll('.chat-message')].every(message => message.getAnimations().every(animation => animation.playState !== 'running')));
     await page.screenshot({ path: join(output, `${name}-${kind.toLowerCase()}-${width}.png`), fullPage: true });
   };
   const openSettings = async () => {
@@ -135,14 +160,19 @@ async function fixture(browser, width, kind, libraryMode = 'ready') {
     const closeOptions = page.getByRole('button', { name: '收起对话选项', exact: true });
     if (await closeOptions.isVisible()) await closeOptions.click();
   };
-  return { page, state, cid, textbox, busy, capture, openSettings, closeSettings,
+  const selectByTitle = async (title, id) => {
+    if (width <= 900) await page.getByRole('button', { name: '对话列表', exact: true }).click();
+    await page.locator('.conversation-item').filter({ hasText: title }).click(); await waitSelected(id);
+    if (width <= 900) await page.waitForFunction(() => document.querySelector('.chat-sidebar')?.getBoundingClientRect().right <= 0);
+  };
+  return { page, state, cid, textbox, busy, capture, openSettings, closeSettings, selectByTitle,
     close: async () => { state.library.resolve(); state.runs.forEach(run => run.finish.resolve()); await page.close(); } };
 }
 
 (async () => {
   const browser = await chromium.launch({ channel: 'msedge', headless: true });
   try {
-    for (const width of [320, 390, 1440]) for (const kind of testKinds) {
+    for (const width of testFocus === 'all' ? [320, 390, 1440] : []) for (const kind of testKinds) {
       const f = await fixture(browser, width, kind);
       try {
         const { page, state, textbox, busy, capture, openSettings, closeSettings } = f;
@@ -180,6 +210,7 @@ async function fixture(browser, width, kind, libraryMode = 'ready') {
         await process.locator('.process-elapsed').waitFor(); await process.locator('summary').click();
         await process.locator('.process-body').waitFor();
         assert.equal(await page.locator('.typing-indicator').count(), 1);
+        await assertTypingGeometry(page);
         const stop = page.getByRole('button', { name: '停止生成', exact: true }), stopBox = await stop.boundingBox();
         assert(stopBox && stopBox.x >= 0 && stopBox.x + stopBox.width <= width + 1 && stopBox.y + stopBox.height <= 844, 'Stop stays inside viewport');
         await capture('expanded-pending');
@@ -252,7 +283,48 @@ async function fixture(browser, width, kind, libraryMode = 'ready') {
         throw error;
       } finally { await f.close(); }
     }
-    for (const libraryMode of testKinds.includes('ROLEPLAY') ? ['slow', 'unavailable'] : []) {
+    for (const width of testFocus !== 'typing' && testKinds.includes('ASSISTANT') ? [390, 1440] : []) {
+      const f = await fixture(browser, width, 'ASSISTANT');
+      try {
+        const { page, state, textbox, busy, capture, selectByTitle } = f;
+        await textbox.fill('第一个会话的问题'); await page.getByRole('button', { name: '发送消息', exact: true }).click();
+        await page.getByRole('button', { name: '停止生成', exact: true }).waitFor();
+        await selectByTitle('合成并行对话', 12003); await busy(false);
+        await textbox.fill('第二个会话的问题'); await page.getByRole('button', { name: '发送消息', exact: true }).click();
+        await page.getByRole('button', { name: '停止生成', exact: true }).waitFor();
+        assert.deepEqual(state.writes.map(write => write.conversationId), [12001, 12003], 'Different conversations admit distinct tasks concurrently');
+        assert(!state.calls.some(call => call.method === 'DELETE'), 'Switching conversations never cancels the background run');
+        await selectByTitle('合成普通对话', 12001); await busy(true);
+        assert.equal(await page.locator('.chat-message.user .message-text').last().innerText(), '第一个会话的问题');
+        await selectByTitle('合成并行对话', 12003); await busy(true);
+        assert.equal(await page.locator('.chat-message.user .message-text').last().innerText(), '第二个会话的问题');
+        state.runs[0].finish.resolve();
+        await page.waitForFunction(() => document.querySelector('#app')?.__vue_app__?.config.globalProperties.$pinia._s.get('chat')?.isConversationStreaming(12001) === false);
+        await busy(true);
+        assert.equal(await page.locator('.chat-message.user .message-text').last().innerText(), '第二个会话的问题', 'Background completion preserves the selected conversation');
+        assert.equal(await page.locator('.typing-indicator').count(), 1, 'B pending survives A completion');
+        await capture('parallel-conversations-pending');
+        await page.getByRole('button', { name: '停止生成', exact: true }).click(); await busy(false);
+        assert.deepEqual(state.calls.filter(call => call.method === 'DELETE').map(call => call.path), ['/api/chat/runs/synthetic-ux-2'], 'Stop targets only the selected conversation');
+        await selectByTitle('合成普通对话', 12001); await busy(false);
+        await page.getByText('这是一条合成回答。', { exact: true }).waitFor();
+        assert.equal(await page.locator('.generation-failure').count(), 0, 'Completed A cannot inherit B cancellation');
+        assert.deepEqual(state.errors, []);
+        console.log(`PASS ${width}px parallel ASSISTANT conversations: A/B admitted, pending isolated, background completion preserved B, stop targeted B only`);
+      } finally { await f.close(); }
+    }
+    for (const width of testFocus === 'typing' ? [390, 1440] : []) for (const kind of testKinds) {
+      const f = await fixture(browser, width, kind);
+      try {
+        await f.textbox.fill(kind === 'ROLEPLAY' ? '惠，今天想聊点轻松的话题。' : '这是一条合成问题。');
+        await f.page.getByRole('button', { name: '发送消息', exact: true }).click();
+        await f.page.locator('.generation-status .process-elapsed').waitFor();
+        await assertTypingGeometry(f.page); await f.capture('typing-aligned');
+        await f.page.getByRole('button', { name: '停止生成', exact: true }).click(); await f.busy(false);
+        assert.deepEqual(f.state.errors, []); console.log(`PASS ${width}px ${kind}: all three loading dots inside content, aligned with status, no pseudo-element overflow`);
+      } finally { await f.close(); }
+    }
+    for (const libraryMode of testFocus === 'all' && testKinds.includes('ROLEPLAY') ? ['slow', 'unavailable'] : []) {
       const f = await fixture(browser, 390, 'ROLEPLAY', libraryMode);
       try {
         if (libraryMode === 'unavailable') {

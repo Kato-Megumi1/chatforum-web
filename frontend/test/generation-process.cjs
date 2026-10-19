@@ -81,11 +81,11 @@ function componentFixture() {
     '@/utils/generation-process': helperModule.exports };
   const mod = { exports: {} }, scope = vue.effectScope();
   scope.run(() => new Function('require', 'module', 'exports', 'defineProps', 'defineEmits', 'Date', 'setInterval', 'clearInterval',
-    compile(script + '\nexport { view };'))(name => {
+    compile(script + '\nexport { view, continuationLabel };'))(name => {
       if (!Object.hasOwn(imports, name)) throw Error('Unexpected import ' + name); return imports[name];
     }, mod, mod.exports, () => props, () => () => {}, { now: () => clock },
     fn => { const key = ++nextTimer; timers.set(key, fn); return key; }, key => timers.delete(key)));
-  return { props, view: mod.exports.view, source, timers,
+  return { props, view: mod.exports.view, continuationLabel: mod.exports.continuationLabel, source, timers,
     mount: () => mounts.forEach(fn => fn()),
     advance: ms => { clock += ms; [...timers.values()].forEach(fn => fn()); },
     unmount: () => { unmounts.forEach(fn => fn()); scope.stop(); },
@@ -114,6 +114,15 @@ test('component releases its only timer on completion and unmount', async t => {
   f.props.progress = { stage: 'generating', elapsedMs: 4100, firstTokenMs: 2000, stages: [] };
   await vue.nextTick(); assert.equal(f.timers.size, 1);
   f.unmount(); assert.equal(f.timers.size, 0);
+});
+
+test('incomplete file delivery offers regeneration while ordinary answer truncation offers continuation', async t => {
+  const f = componentFixture(); t.after(f.unmount);
+  f.props.generation = { truncated: true, canContinue: true };
+  await vue.nextTick(); assert.equal(f.continuationLabel.value, '继续生成');
+  f.props.generation = { truncated: true, canContinue: true, fileIncomplete: true, filePaths: ['demo.html'] };
+  await vue.nextTick(); assert.equal(f.continuationLabel.value, '重新生成文件');
+  f.props.generation.fileIncomplete = false; await vue.nextTick(); assert.equal(f.continuationLabel.value, '继续生成');
 });
 
 test('waiting and finished views share a keyboard-native disclosure with fixed text and reduced motion', () => {

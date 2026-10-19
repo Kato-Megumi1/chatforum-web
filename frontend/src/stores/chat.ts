@@ -1,8 +1,8 @@
 import { defineStore } from 'pinia';
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import request from '@/utils/request';
 import { watchChatRun } from '@/utils/chat-stream';
-import { disconnectLocalWorkspace } from '@/utils/local-workspace';
+import { disconnectLocalWorkspace, localWorkspace } from '@/utils/local-workspace';
 import { CHAT_NAVIGATION_KEY, emptyChatNavigation, readChatNavigation, type ChatSpace } from '@/utils/chat-navigation';
 import { chatFileRef, type ChatFile } from '@/utils/chat-files';
 import { selectedChatModel } from '@/utils/chat-model-selection';
@@ -15,6 +15,8 @@ interface Message { id: number; role: 'system' | 'user' | 'assistant'; content: 
   ragMetadata?: any; conversationId: number; createdAt: string; pending?: boolean; localAttempt?: boolean;
   failure?: { message: string; elapsedMs: number; cancelled: boolean; retryable: boolean } }
 interface FailedAttempt { question: Message; reply: Message; runId?: string }
+interface ConversationRun { controller: AbortController; epoch: number; runId?: string;
+  question?: Message; reply?: Message; settled?: boolean }
 interface ChatModel { id: string; label: string; available: boolean; unavailableReason: string | null }
 interface Run { id?: string; status: string; error?: string; result?: { content?: string; ragMetadata?: any;
   failure?: { code?: string; message?: string } } }
@@ -33,12 +35,14 @@ export const useChatStore = defineStore('chat', () => {
   const messages = ref<Message[]>([]);
   const llmConfig = ref({ configured: false, model: '', defaultModelId: '', models: [] as ChatModel[] });
   const preferredModelId = ref('');
-  const isStreaming = ref(false);
   const conversationSettings = ref<Record<number, ConversationSettings>>({});
-  const abortController = ref<AbortController | null>(null);
-  let activeRun: string | null = null;
-  const pendingReply = ref<Message | null>(null);
-  const pendingQuestion = ref<Message | null>(null);
+  const conversationRuns = ref<Record<number, ConversationRun>>({});
+  const preparingRun = ref<ConversationRun | null>(null);
+  const currentRun = computed(() => currentConversation.value
+    ? conversationRuns.value[currentConversation.value.id] : preparingRun.value);
+  const isStreaming = computed(() => !!currentRun.value);
+  const abortController = computed(() => currentRun.value?.controller || null);
+  const isConversationStreaming = (id: number) => !!conversationRuns.value[id];
   let selection = 0;
   let identityEpoch = 0;
   const navigation = ref(emptyChatNavigation(0));
@@ -83,7 +87,9 @@ export const useChatStore = defineStore('chat', () => {
     llmConfig.value = { configured: data.configured, model: data.model, defaultModelId: data.defaultModelId || '', models: data.models || [] };
   };
   const createConversation = async (title?: string, identity: { conversationType?: string; persona?: string; personaLabel?: string; customPersonaPrompt?: string } = {}) => {
+    const epoch = identityEpoch;
     const data = await request.post<Conversation>('/chat/conversations', { title, ...identity });
+    if (epoch !== identityEpoch) throw new Error('登录账号已切换，请重新操作');
     conversations.value.unshift(data);
     return data;
   };
@@ -127,15 +133,19 @@ export const useChatStore = defineStore('chat', () => {
         }
       } catch { /* Retain the interrupted attempt until its durable result is known. */ }
     }
-    let appendPending = pendingReply.value?.conversationId === conversation.id;
-    if (appendPending && activeRun) {
-      const state = await request.get<Run>('/chat/runs/' + activeRun);
-      if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(state.status)) appendPending = false;
+    const active = conversationRuns.value[conversation.id];
+    let appendPending = !!active?.question && !!active.reply && !active.settled;
+    if (appendPending && active.runId) {
+      const state = await request.get<Run>('/chat/runs/' + active.runId);
+      if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(state.status)) {
+        appendPending = false;
+        if (state.status === 'COMPLETED') data = await request.get<Message[]>('/chat/conversations/' + conversation.id + '/messages');
+      }
     }
     if (stamp === selection) {
       messages.value = data.map(m => ({ ...m, role: m.role.toLowerCase() as Message['role'] }));
-      if (appendPending && pendingQuestion.value && pendingReply.value)
-        messages.value.push(pendingQuestion.value, pendingReply.value);
+      if (appendPending && active?.question && active.reply)
+        messages.value.push(active.question, active.reply);
       else if (failedAttempts.value[conversation.id]) {
         const attempt = failedAttempts.value[conversation.id];
         messages.value.push(attempt.question, attempt.reply);
@@ -143,14 +153,16 @@ export const useChatStore = defineStore('chat', () => {
     }
     } finally { if (stamp === selection) isLoadingConversation.value = false; }
   };
-  const stopGeneration = () => {
-    disconnectLocalWorkspace();
-    abortController.value?.abort();
-    if (activeRun) void request.delete('/chat/runs/' + activeRun).catch(() => undefined);
-    // The pending sender's finally owns the lock; don't admit a second request early.
+  const stopGeneration = (conversationId = currentConversation.value?.id) => {
+    const active = conversationId ? conversationRuns.value[conversationId] : preparingRun.value;
+    if (!active) return;
+    if (localWorkspace?.value?.conversationId === conversationId) disconnectLocalWorkspace();
+    active.controller.abort();
+    if (active.runId) void request.delete('/chat/runs/' + active.runId).catch(() => undefined);
+    // This conversation's finally owns its lock; other conversations remain available.
   };
   const deleteConversation = async (id: number) => {
-    if (currentConversation.value?.id === id) stopGeneration();
+    stopGeneration(id);
     await request.delete('/chat/conversations/' + id);
     conversations.value = conversations.value.filter(c => c.id !== id);
     delete conversationSettings.value[id];
@@ -173,32 +185,43 @@ export const useChatStore = defineStore('chat', () => {
   const send = async (question: string, mode: 'normal' | 'agent', enabledSkills?: string[],
     persona?: string, customSystemPrompt?: string, knowledgeBaseId?: number, onStream?: (text: string) => void, codingWorkspaceId?: string,
     attachments?:{files:ChatFile[];onAccepted?:()=>void}) => {
-    if (isStreaming.value || (!question.trim()&&!attachments?.files.length)) return false;
+    const initialConversation = currentConversation.value, initialSelection = selection;
+    if ((initialConversation ? isConversationStreaming(initialConversation.id) : !!preparingRun.value) ||
+      (!question.trim()&&!attachments?.files.length)) return false;
     let completed=false;
-    isStreaming.value = true;
     const controller = new AbortController();
-    abortController.value = controller;
     const sendingEpoch = identityEpoch, startedAt = Date.now();
-    const ownsAttempt = () => sendingEpoch === identityEpoch;
-    let cid: number | undefined;
+    let cid = initialConversation?.id;
+    let runtime: ConversationRun = { controller, epoch: sendingEpoch };
+    if (cid) { conversationRuns.value[cid] = runtime; runtime = conversationRuns.value[cid]; }
+    else { preparingRun.value = runtime; runtime = preparingRun.value; }
+    const ownsAttempt = () => sendingEpoch === identityEpoch &&
+      (cid ? conversationRuns.value[cid]?.controller === controller : preparingRun.value?.controller === controller);
     let questionMessage: Message | undefined, reply: Message | undefined;
     let failureMessage = '', cancelled = false, retryable = true;
     let runId: string | undefined;
     try {
-      if (!currentConversation.value) await selectConversation(await createConversation(question.slice(0, 30), {
-        conversationType: persona ? 'ROLEPLAY' : 'ASSISTANT', persona, customPersonaPrompt: customSystemPrompt }));
+      let conversation = initialConversation;
+      if (!conversation) {
+        conversation = await createConversation(question.slice(0, 30), {
+          conversationType: persona ? 'ROLEPLAY' : 'ASSISTANT', persona, customPersonaPrompt: customSystemPrompt });
+        if (!ownsAttempt() || controller.signal.aborted) return false;
+        cid = conversation.id;
+        conversationRuns.value[cid] = runtime; runtime = conversationRuns.value[cid];
+        if (preparingRun.value?.controller === controller) preparingRun.value = null;
+        if (selection === initialSelection && !currentConversation.value) await selectConversation(conversation);
+      }
       if (!ownsAttempt() || controller.signal.aborted) return false;
-      cid = currentConversation.value!.id;
+      cid = conversation.id;
       dismissFailedAttempt(cid);
-      pendingQuestion.value = { id: -Date.now(), role: 'user', content: question,
+      runtime.question = { id: -Date.now(), role: 'user', content: question,
         conversationId: cid, createdAt: new Date().toISOString(),
         ...(attachments?.files.length?{ragMetadata:{messageAttachments:attachments.files}}:{}) };
-      const responseOptions = conversationResponseOptions(getConversationSettings(cid), currentConversation.value?.conversationType);
-      pendingReply.value = { id: -Date.now() - 1, role: 'assistant', content: '', pending: true,
+      const responseOptions = conversationResponseOptions(getConversationSettings(cid), conversation.conversationType);
+      runtime.reply = { id: -Date.now() - 1, role: 'assistant', content: '', pending: true,
         conversationId: cid, createdAt: new Date().toISOString(), ragMetadata: { responseOptions } };
-      // Read through refs so streaming callbacks mutate Vue's reactive proxies.
-      questionMessage = pendingQuestion.value; reply = pendingReply.value;
-      messages.value.push(pendingQuestion.value, pendingReply.value);
+      questionMessage = runtime.question; reply = runtime.reply;
+      if (currentConversation.value?.id === cid) messages.value.push(questionMessage, reply);
       // Admit once; subscribe/reconnect to the durable run without repeating model calls.
       const run = await request.post<Run>('/chat/runs', { requestId: crypto.randomUUID(),
         conversationId: cid, question, mode, enabledSkills: enabledSkills?.filter(skill => skill !== 'web_search'),
@@ -207,7 +230,7 @@ export const useChatStore = defineStore('chat', () => {
         customSystemPrompt: customSystemPrompt || undefined, knowledgeBaseId: knowledgeBaseId || undefined,
         modelId: selectedModelId(cid) });
       if (!ownsAttempt() || !run.id) return false;
-      runId = activeRun = run.id;
+      runId = runtime.runId = run.id;
       attachments?.onAccepted?.();
       if (controller.signal.aborted) { await request.delete('/chat/runs/' + run.id); return false; }
       const status: Run = await watchChatRun(run.id, controller.signal, text => {
@@ -243,7 +266,7 @@ export const useChatStore = defineStore('chat', () => {
       }
     } finally {
       if (ownsAttempt()) {
-        activeRun = null; abortController.value = null;
+        runtime.settled = true;
         if (reply) reply.pending = false;
         if (!completed && cid && questionMessage && reply && conversations.value.some(conversation => conversation.id === cid)) {
           const measured = reply.ragMetadata?.performance?.elapsedMs;
@@ -253,11 +276,11 @@ export const useChatStore = defineStore('chat', () => {
           reply.failure = { message: failureMessage || '已停止生成', elapsedMs, cancelled: cancelled || controller.signal.aborted, retryable };
           failedAttempts.value[cid] = { question: questionMessage, reply, runId };
         }
-        pendingReply.value = null; pendingQuestion.value = null;
         if (currentConversation.value && currentConversation.value.id === cid) {
           try { await selectConversation(currentConversation.value); } catch { /* The visible local attempt survives network loss. */ }
         }
-        isStreaming.value = false;
+        if (cid && conversationRuns.value[cid]?.controller === controller) delete conversationRuns.value[cid];
+        if (preparingRun.value?.controller === controller) preparingRun.value = null;
         void loadConversations().catch(() => undefined);
       }
     }
@@ -269,9 +292,10 @@ export const useChatStore = defineStore('chat', () => {
     disconnectLocalWorkspace(false); // Credentials are changing; expired browser leases fail closed.
     identityEpoch++; navigation.value = emptyChatNavigation(0); drafts.value = {}; draftAttachments.value={}; failedAttempts.value={}; isLoadingConversation.value = false;
     try { sessionStorage.removeItem(CHAT_NAVIGATION_KEY); } catch { /* Storage may be blocked. */ }
-    selection++; abortController.value?.abort(); activeRun = null;
-    pendingReply.value = null; pendingQuestion.value = null;
-    isStreaming.value = false;
+    selection++;
+    for (const active of Object.values(conversationRuns.value)) active.controller.abort();
+    preparingRun.value?.controller.abort();
+    conversationRuns.value = {}; preparingRun.value = null;
     conversations.value = []; currentConversation.value = null; messages.value = [];
     conversationSettings.value = {};
     preferredModelId.value = '';
@@ -284,5 +308,5 @@ export const useChatStore = defineStore('chat', () => {
     navigation, drafts, draftAttachments, failedAttempts, dismissFailedAttempt, isLoadingConversation, initializeNavigation, setSpace, saveView,
     getConversationSettings, saveConversationSettings, selectedModelId, loadConversations, loadDefaultConfig,
     createConversation, configureIdentity, clearSelection, updateConversation, deleteConversation, deleteMessage, selectConversation,
-    sendMessage, sendMessageAgent, sendConfigured: send, stopGeneration, abortController, resetForUser };
+    sendMessage, sendMessageAgent, sendConfigured: send, stopGeneration, abortController, isConversationStreaming, resetForUser };
 }, { persist: { key: 'chatforum-chat', storage: localStorage, paths: ['conversationSettings', 'preferredModelId'] } });
