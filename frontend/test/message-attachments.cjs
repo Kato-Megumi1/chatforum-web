@@ -77,7 +77,7 @@ function chatRecoveryFixture({acceptImmediately=true,knowledgeBaseId=0}={}){
  let epoch=3,admission,sentArguments;
  const run=deferred(),errors=[],request={get:async path=>path.startsWith('/coding/')?{files:[attachment]}:[]};
  const store=vue.reactive({currentConversation:draftConversation(),conversations:[draftConversation()],navigation:{userId:7,space:'ASSISTANT',conversationId:11,scroll:{}},
-  messages:[],drafts:{},draftAttachments:{11:[{...attachment}]},isStreaming:false,isLoadingConversation:false,
+  messages:[],drafts:{},draftAttachments:{11:[{...attachment}]},failedAttempts:{},isStreaming:false,isLoadingConversation:false,
   llmConfig:{models:[{id:'fixture-model',available:true}],defaultModelId:'fixture-model'},
   initializeNavigation(){},setSpace(space){this.navigation.space=space;},selectedModelId(){return'fixture-model';},
   getConversationSettings(){return{agentMode:'normal',knowledgeBaseId,codingEnabled:false};},saveConversationSettings(){},
@@ -101,7 +101,7 @@ function chatRecoveryFixture({acceptImmediately=true,knowledgeBaseId=0}={}){
    '@/utils/forum-links':{},marked:{marked:{}},dompurify:{},dayjs:()=>({format:()=>''}),
   };
   const script=readFileSync(join(__dirname,'../src/views/Chat.vue'),'utf8').match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1];
-  const code=ts.transpileModule(script+'\nexport {handleSendMessage,inputText};',{
+  const code=ts.transpileModule(script+'\nexport {handleSendMessage,retryFailedAnswer,inputText};',{
    compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;
   const mod={exports:{}};
   scope.run(()=>new Function('require','module','exports','window',code)(name=>{
@@ -167,4 +167,102 @@ test('old-view admission and failure cannot alter a new account or same-account 
   f.accept();f.run.reject(Error('Synthetic failure'));await sending;
   assert.equal(f.store.drafts[11],'New session draft');assert.equal(f.store.draftAttachments[11][0].id,99);assert.deepEqual(f.errors,[]);
  }
+});
+
+test('retry button preserves newer drafts and only explicitly resubmits the matching failed attempt',async()=>{
+ const f=chatRecoveryFixture(),active=f.view();await active.mount();
+ const message={id:-2,conversationId:11,failure:{retryable:true}};
+ f.store.failedAttempts[11]={question:{content:failed.text,ragMetadata:{messageAttachments:[attachment]}},reply:message};
+ active.inputText.value='A newer unsent question';await active.retryFailedAnswer(message);
+ assert.equal(f.sentArguments(),undefined);assert.equal(active.inputText.value,'A newer unsent question');
+ active.inputText.value=failed.text;const sending=active.retryFailedAnswer(message);await tick();
+ assert.equal(f.sentArguments()[0],failed.text);assert.deepEqual(f.sentArguments()[8].files,[attachment]);
+ f.run.resolve(true);await sending;active.unmount();
+});
+
+function durableStoreFixture(){
+ const persisted=[],requests=[],waiters=[],saved=new Map();let runNumber=0,recoveredState={status:'RUNNING'};
+ const original=draftConversation(),other=draftConversation(12);
+ const request={get:async path=>{
+  requests.push(['get',path]);
+  if(path==='/chat/conversations')return[original,other];
+  if(path.startsWith('/chat/runs/'))return recoveredState;
+  return saved.get(Number(path.split('/')[3]))||[];
+ },post:async(path,input)=>{requests.push(['post',path,input]);return{id:'run-'+(++runNumber),status:'RUNNING'};},delete:async path=>requests.push(['delete',path])};
+ const storage={getItem:()=>null,setItem:(...args)=>persisted.push(args),removeItem(){}};
+ const navigationModule={exports:{}};
+ new Function('module','exports',ts.transpileModule(readFileSync(join(__dirname,'../src/utils/chat-navigation.ts'),'utf8'),{
+  compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(navigationModule,navigationModule.exports);
+ const imports={pinia:{defineStore:(_name,setup)=>()=>vue.reactive(setup())},vue, '@/utils/request':request,
+  '@/utils/chat-stream':{watchChatRun:(_id,_signal,onDelta,onProgress)=>{const wait=deferred();waiters.push({...wait,onDelta,onProgress});return wait.promise;}},
+  '@/utils/local-workspace':{disconnectLocalWorkspace(){}},'@/utils/chat-navigation':navigationModule.exports,
+  '@/utils/chat-files':load(request),'@/utils/chat-model-selection':{selectedChatModel:()=> 'fixture-model'},
+  '@/utils/roleplay-defaults':roleplayDefaultsModule.exports};
+ const mod={exports:{}},code=ts.transpileModule(readFileSync(join(__dirname,'../src/stores/chat.ts'),'utf8'),{
+  compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;
+ new Function('require','module','exports','localStorage','sessionStorage',code)(name=>{
+  if(Object.hasOwn(imports,name))return imports[name];throw Error(name);
+ },mod,mod.exports,storage,storage);
+ const store=mod.exports.useChatStore();store.conversations=[original,other];store.currentConversation=original;
+ return{store,original,other,requests,persisted,waiters,saved,setState:value=>{recoveredState=value;}};
+}
+
+test('failed durable task retains its question, attachments, error and elapsed time across conversation reloads without persisting history',async()=>{
+ const f=durableStoreFixture(),sending=f.store.sendConfigured(failed.text,'normal',[],undefined,undefined,undefined,undefined,undefined,{files:[attachment]});
+ await tick();assert.equal(f.waiters.length,1);
+ let visible;const stop=vue.watchEffect(()=>{const reply=f.store.messages.at(-1);visible={elapsed:reply?.ragMetadata?.performance?.elapsedMs,content:reply?.content};});
+ f.waiters[0].onProgress({elapsedMs:205123});f.waiters[0].onDelta('Unfinished public answer');await vue.nextTick();
+ assert.deepEqual(visible,{elapsed:205123,content:'Unfinished public answer'},'Streaming callbacks must update the reactive UI');stop();
+ f.waiters[0].resolve({status:'FAILED',error:'Generic failure',result:{failure:{code:'MODEL_REQUEST_TIMEOUT',message:'模型等待超时，请重新发送'}}});
+ assert.equal(await sending,false);
+ assert.equal(f.store.messages.length,2);assert.equal(f.store.messages[0].content,failed.text);
+ assert.deepEqual(f.store.messages[0].ragMetadata.messageAttachments,[attachment]);
+ assert.equal(f.store.messages[1].failure.message,'模型等待超时，请重新发送');
+ assert.equal(f.store.messages[1].failure.elapsedMs,205123);assert.equal(f.store.messages[1].failure.retryable,true);
+ assert(f.store.messages.every(message=>message.localAttempt&&!message.pending));
+ await f.store.selectConversation(f.other);assert.deepEqual(f.store.messages,[]);
+ await f.store.selectConversation(f.original);assert.equal(f.store.messages.length,2);
+ assert.equal(f.requests.filter(([method,path])=>method==='post'&&path==='/chat/runs').length,1,'No automatic paid retry');
+ assert(f.persisted.every(([,value])=>!String(value).includes(failed.text)),'Failed question does not enter browser persistence');
+ assert.equal(f.saved.size,0,'No server message write for a failed answer');
+});
+
+test('explicit new send replaces a local failure and completed server history replaces pending state once',async()=>{
+ const f=durableStoreFixture(),one=f.store.sendMessage('First failed question');await tick();
+ f.waiters[0].resolve({status:'FAILED',error:'Synthetic failure'});await one;
+ const next=f.store.sendMessage('Explicit retry');await tick();
+ assert.equal(f.store.messages.length,2);assert.equal(f.store.messages[0].content,'Explicit retry');
+ assert.equal(Object.keys(f.store.failedAttempts).length,0);
+ f.saved.set(11,[{id:101,role:'USER',content:'Explicit retry',conversationId:11},{id:102,role:'ASSISTANT',content:'Done',conversationId:11}]);
+ f.waiters[1].resolve({status:'COMPLETED',result:{content:'Done'}});assert.equal(await next,true);
+ assert.deepEqual(f.store.messages.map(message=>message.id),[101,102]);
+ assert(f.store.messages.every(message=>!message.localAttempt&&!message.failure));
+});
+
+test('transport failure checks the existing durable run and cannot offer a duplicate paid retry while it is still running',async()=>{
+ const f=durableStoreFixture(),sending=f.store.sendMessage('Network interrupted question');await tick();
+ f.waiters[0].reject(Error('SSE disconnected'));assert.equal(await sending,false);
+ assert.equal(f.store.messages.length,2);assert.equal(f.store.messages[1].failure.retryable,false);
+ assert.match(f.store.messages[1].failure.message,/可能仍在生成/);
+ assert(f.requests.some(([method,path])=>method==='get'&&path==='/chat/runs/run-1'));
+ assert.equal(f.requests.filter(([method])=>method==='post').length,1);
+ f.saved.set(11,[{id:91,role:'USER',content:'Network interrupted question',conversationId:11},{id:92,role:'ASSISTANT',content:'Finished after disconnect',conversationId:11}]);
+ f.setState({status:'COMPLETED',result:{content:'Finished after disconnect'}});
+ await f.store.selectConversation(f.other);await f.store.selectConversation(f.original);
+ assert.deepEqual(f.store.messages.map(message=>message.id),[91,92]);assert.equal(Object.keys(f.store.failedAttempts).length,0);
+ const g=durableStoreFixture(),recovery=g.store.sendMessage('Completed while disconnected');await tick();
+ g.saved.set(11,[{id:1,role:'USER',content:'Completed while disconnected',conversationId:11},{id:2,role:'ASSISTANT',content:'Recovered result',conversationId:11}]);
+ g.setState({status:'COMPLETED',result:{content:'Recovered result'}});g.waiters[0].reject(Error('SSE disconnected'));
+ assert.equal(await recovery,true);assert.equal(g.store.messages[1].content,'Recovered result');assert.equal(Object.keys(g.store.failedAttempts).length,0);
+});
+
+test('late failed run from an expired account epoch cannot remove the new account pending answer or reintroduce old question',async()=>{
+ const f=durableStoreFixture(),old=f.store.sendMessage('Old account question');await tick();
+ f.store.resetForUser();const replacement=draftConversation(21,8);f.store.conversations=[replacement];f.store.currentConversation=replacement;
+ const next=f.store.sendMessage('New account question');await tick();assert.equal(f.store.isStreaming,true);
+ f.waiters[0].resolve({status:'FAILED',error:'Old session failed'});await old;
+ assert.equal(f.store.isStreaming,true);assert.equal(f.store.messages[0].content,'New account question');assert.equal(f.store.messages[1].pending,true);
+ assert.deepEqual(Object.keys(f.store.failedAttempts),[]);f.waiters[1].resolve({status:'CANCELLED'});await next;
+ assert.equal(f.store.messages[1].failure.cancelled,true);assert.equal(f.store.messages[1].failure.retryable,true);
+ f.store.dismissFailedAttempt(21);assert.deepEqual(f.store.messages,[]);
 });

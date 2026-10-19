@@ -4,15 +4,17 @@
       <summary aria-label="处理过程">
         <span class="process-indicator" aria-hidden="true"></span>
         <span class="process-current">{{ view.label }}</span>
-        <span v-if="view.elapsedMs !== null" class="process-elapsed">{{ seconds(view.elapsedMs) }} 秒</span>
+        <span v-if="view.elapsedMs !== null" class="process-elapsed">总用时 {{ seconds(view.elapsedMs) }} 秒</span>
         <span class="process-chevron" aria-hidden="true">⌄</span>
       </summary>
       <div class="process-body">
+        <p v-if="view.summary" class="process-summary">{{ view.summary }}</p>
+        <p v-if="view.lastDataAgeMs !== null" class="process-receiving">{{ view.lastDataAgeMs < 3000 ? '正在接收模型数据' : `${seconds(view.lastDataAgeMs)} 秒前收到模型数据` }}</p>
+        <div class="process-table-heading">阶段累计用时</div>
         <ol v-if="view.phases.length" class="process-phases" aria-label="已收到的处理阶段">
           <li v-for="phase in view.phases" :key="phase.phase" :class="{ 'phase-active': phase.active }">
             <span class="phase-copy">
               <span class="phase-label">{{ phase.label }}<span v-if="phase.active" class="phase-state">进行中</span></span>
-              <span class="phase-description">{{ phase.description }}</span>
             </span>
             <span v-if="phase.durationMs !== null" class="phase-metrics">{{ seconds(phase.durationMs) }} 秒</span>
           </li>
@@ -22,7 +24,7 @@
     <span v-else class="process-compact" :class="{ 'is-pending': pending }">
       <span class="process-indicator" aria-hidden="true"></span>
       <span class="process-current">{{ view.label }}</span>
-      <span v-if="view.elapsedMs !== null" class="process-elapsed">{{ seconds(view.elapsedMs) }} 秒</span>
+      <span v-if="view.elapsedMs !== null" class="process-elapsed">总用时 {{ seconds(view.elapsedMs) }} 秒</span>
     </span>
     <span v-if="pending" class="process-announcement" role="status">{{ view.label }}</span>
     <button v-if="!pending && generation?.truncated && generation?.canContinue" class="continue-generation" :disabled="busy" @click="$emit('continue')">继续生成</button>
@@ -33,14 +35,14 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import type { GenerationProgress } from '@/utils/chat-stream';
 import { generationProcessView, generationSeconds as seconds } from '@/utils/generation-process';
 const props = defineProps<{ pending?: boolean; busy?: boolean; progress?: GenerationProgress;
-  generation?: {truncated: boolean; canContinue: boolean}; deepThinking?: boolean }>();
+  generation?: {truncated: boolean; canContinue: boolean}; allowThinking?: boolean }>();
 defineEmits<{ continue: [] }>();
 const sampledAt = ref(Date.now()), now = ref(sampledAt.value), frozenExtension = ref(0);
 let mounted = false, timer: ReturnType<typeof setInterval> | undefined;
 const stopClock = () => { if (timer !== undefined) clearInterval(timer); timer = undefined; };
 const syncClock = () => {
   stopClock();
-  if (mounted && props.pending && generationProcessView(props.progress, true, 0, !!props.deepThinking).phase !== 'completed')
+  if (mounted && props.pending && generationProcessView(props.progress, true, 0, !!props.allowThinking).phase !== 'completed')
     timer = setInterval(() => { now.value = Date.now(); }, 250);
 };
 watch([() => props.pending, () => props.progress], ([pending, snapshot], previous) => {
@@ -55,7 +57,7 @@ watch([() => props.pending, () => props.progress], ([pending, snapshot], previou
   syncClock();
 }, { immediate: true });
 const view = computed(() => generationProcessView(props.progress, !!props.pending,
-  props.pending ? Math.max(0, now.value - sampledAt.value) : frozenExtension.value, !!props.deepThinking));
+  props.pending ? Math.max(0, now.value - sampledAt.value) : frozenExtension.value, !!props.allowThinking));
 onMounted(() => { mounted = true; syncClock(); });
 onUnmounted(() => { mounted = false; stopClock(); });
 </script>
@@ -74,13 +76,15 @@ onUnmounted(() => { mounted = false; stopClock(); });
 .process-indicator { width:6px;height:6px;border-radius:50%;background:#90a3b7;flex:none; }
 .is-pending .process-indicator { background:#5b91c4;animation:process-pulse 1.6s ease-in-out infinite; }
 .process-body { width:430px;max-width:100%;box-sizing:border-box;margin-top:3px;padding:10px 12px;border:1px solid #dce5ef;border-radius:10px;background:rgba(248,250,253,.94); }
+.process-summary { margin:0 0 4px;color:#456487;font-size:13px;line-height:1.65; }
+.process-receiving { margin:0 0 10px;color:#7b8b9d; }
+.process-table-heading { margin:0 0 3px;color:#7b8b9d;font-size:11px; }
 .process-phases { margin:0;padding:0;list-style:none; }
 .process-phases li { display:flex;align-items:flex-start;justify-content:space-between;gap:8px 16px;padding:6px 0; }
 .phase-copy { display:flex;min-width:0;flex-direction:column;gap:1px; }
 .phase-label { color:#53667e; }
 .phase-active .phase-label { color:#346d9e; }
 .phase-state { margin-left:6px;font-size:11px;color:#527d9d; }
-.phase-description { color:#7b8b9d;line-height:1.5; }
 .phase-metrics { flex:none;color:#7b8b9d; }
 .process-announcement { position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0; }
 .continue-generation { border:1px solid #cbd7e8;border-radius:14px;background:#fff;padding:3px 11px;min-height:32px;color:#3b638e;cursor:pointer; }

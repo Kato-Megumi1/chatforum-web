@@ -75,7 +75,7 @@ test('completed snapshots never tick or mark every earlier step successful', () 
 function componentFixture() {
   const source = readFileSync(join(__dirname, '../src/components/GenerationStatus.vue'), 'utf8');
   const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1];
-  const props = vue.reactive({ pending: true, progress: undefined, busy: false, deepThinking: false });
+  const props = vue.reactive({ pending: true, progress: undefined, busy: false, allowThinking: false });
   const mounts = [], unmounts = [], timers = new Map(); let clock = 10000, nextTimer = 0;
   const imports = { vue: { ...vue, onMounted: fn => mounts.push(fn), onUnmounted: fn => unmounts.push(fn) },
     '@/utils/generation-process': helperModule.exports };
@@ -121,7 +121,7 @@ test('waiting and finished views share a keyboard-native disclosure with fixed t
   assert.match(f.source, /<details v-if="view\.phases\.length"/);
   assert.match(f.source, /v-else class="process-compact"/);
   assert.match(f.source, /<summary aria-label="处理过程">/);
-  assert.match(f.source, /phase-description/);
+  assert.match(f.source, /process-summary/); assert.match(f.source, /阶段累计用时/); assert.match(f.source, /总用时/);
   assert.doesNotMatch(f.source, /process-metrics|model-active|首段输出|次调用/);
   assert.match(f.source, /summary:focus-visible/); assert.match(f.source, /prefers-reduced-motion:reduce/);
   assert.doesNotMatch(f.source, /v-html|reasoning_content|chain_of_thought|思考链/);
@@ -157,4 +157,21 @@ test('a provider-confirmed thinking phase has its own public summary', () => {
     phases: [{ phase: 'thinking', durationMs: 4000, modelCalls: 1 }] }, true, 0, false);
   assert.equal(roleplay.label, '生成回答'); assert.equal(roleplay.phases.some(row => row.phase === 'thinking'), false);
   assert.doesNotMatch(JSON.stringify(roleplay), /深度思考/);
+});
+
+test('observed thinking remains visible with missing option metadata and receiving counters are actual data', () => {
+  const snapshot = { phase: 'thinking', stage: 'generating', elapsedMs: 77600, phaseElapsedMs: 74400,
+    phases: [{ phase: 'generating', durationMs: 2500, modelCalls: 1 }, { phase: 'thinking', durationMs: 74400, modelCalls: 0 }],
+    modelOutput: { thinkingChars: 1234, textChars: 0, toolChars: 0, lastDataElapsedMs: 77500 },
+    reasoning_content: 'SECRET_PRIVATE_REASONING' };
+  const first = generationProcessView(snapshot, true, 300, true);
+  assert.equal(first.label, '深度思考中'); assert.equal(first.elapsedMs, 77900);
+  assert.equal(first.phases.find(row => row.phase === 'thinking').durationMs, 74700);
+  assert.match(first.summary, /1,234 字思考数据/); assert.equal(first.lastDataAgeMs, 400);
+  const next = generationProcessView({ ...snapshot, elapsedMs: 78600, phases: snapshot.phases.map(row =>
+    row.phase === 'thinking' ? { ...row, durationMs: row.durationMs + 1000 } : row) }, true, 0, true);
+  assert(next.phases.find(row => row.phase === 'thinking').durationMs > first.phases.find(row => row.phase === 'thinking').durationMs);
+  assert(!JSON.stringify(first).includes('SECRET_'));
+  assert.equal(generationProcessView({ ...snapshot, activity: 'preview_html' }, true, 0, true).summary, '正在生成手机和桌面的页面预览');
+  assert(!generationProcessView({ ...snapshot, activity: 'SECRET_ACTIVITY' }, true, 0, true).summary.includes('SECRET_'));
 });

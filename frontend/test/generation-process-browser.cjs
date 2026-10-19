@@ -19,6 +19,7 @@ const progress = (phase, elapsedMs, hadThinking = false) => ({ stage: phase === 
   phases: [{ phase: 'queued', durationMs: 200, modelCalls: 0 }, { phase: 'context', durationMs: 800, modelCalls: 0 },
     ...(hadThinking && phase !== 'thinking' ? [{ phase: 'thinking', durationMs: 46000, modelCalls: 1 }] : []),
     { phase, durationMs: elapsedMs - 1000, modelCalls: phase === 'generating' ? 1 : 2 }],
+  modelOutput: { thinkingChars: hadThinking ? 1234 : 0, textChars: hadThinking ? 0 : 32, toolChars: 0, lastDataElapsedMs: elapsedMs - 200 },
   reasoning_content: 'SECRET_INNER_REASONING', system: 'SECRET_SYSTEM_PROMPT' });
 
 (async () => {
@@ -31,7 +32,7 @@ const progress = (phase, elapsedMs, hadThinking = false) => ({ stage: phase === 
     let reads = 0, completed = false;
     const content = '虚构的最终回答，只有核验后的正文。';
     const metadata = { state: kind === 'ASSISTANT' ? 'general' : 'roleplay', performance: progress('completed', 90200, kind === 'ASSISTANT'),
-      responseOptions: { deepThinking: kind === 'ASSISTANT', webSearch: true }, webSearch: { enabled: true, sources: [
+      responseOptions: { deepThinking: kind === 'ASSISTANT', webSearch: kind === 'ASSISTANT' }, webSearch: { enabled: true, sources: [
         {title:'虚构公开来源',url:'https://example.org/source',snippet:'只来自搜索摘要，不冒称已读取全文。',engine:'Bing',retrievedAt:'2026-10-19T01:00:00Z'},
         {title:'UNSAFE_SOURCE',url:'javascript:alert(1)',snippet:'must not render'},
       ] } };
@@ -107,7 +108,8 @@ const progress = (phase, elapsedMs, hadThinking = false) => ({ stage: phase === 
       assert.equal(await thinking.getAttribute('aria-checked'), 'true');
       await thinking.locator('..').click(); assert.equal(await thinking.getAttribute('aria-checked'), 'false'); await thinking.locator('..').click();
     } else assert.equal(await thinking.count(), 0, 'Roleplay has no deep-thinking setting, including old cached true');
-    assert.equal(await web.getAttribute('aria-checked'), 'false'); await web.locator('..').click(); assert.equal(await web.getAttribute('aria-checked'), 'true');
+    if (kind === 'ASSISTANT') { assert.equal(await web.getAttribute('aria-checked'), 'false'); await web.locator('..').click(); assert.equal(await web.getAttribute('aria-checked'), 'true'); }
+    else assert.equal(await web.count(), 0, 'Roleplay has no web-search setting');
     await closeSettings();
     await page.locator('.chat-textarea textarea').fill('虚构请求');
     await page.getByRole('button', { name: '发送消息', exact: true }).click();
@@ -116,15 +118,16 @@ const progress = (phase, elapsedMs, hadThinking = false) => ({ stage: phase === 
     await openSettings();
     if (kind === 'ASSISTANT') assert(await thinking.isDisabled());
     else assert.equal(await thinking.count(), 0);
-    assert(await web.isDisabled()); await closeSettings();
+    if (kind === 'ASSISTANT') assert(await web.isDisabled());
+    await closeSettings();
     await details.locator('summary').focus(); await page.keyboard.press('Enter');
     await details.locator('.process-body').waitFor();
     assert.equal(await details.evaluate(el => el.open), true);
     assert.equal(await page.locator('.typing-indicator').count(), 1, 'One pending bubble, not duplicate process replies');
     assert.equal(await details.locator('.model-active,.process-metrics').count(), 0);
     assert.equal(await details.locator('.process-phases li').count() > 0, true);
-    assert.equal(await details.locator('.phase-description').count() > 0, true);
-    if (kind === 'ASSISTANT') assert((await details.innerText()).includes('分析问题并形成回答思路'));
+    assert.equal(await details.locator('.process-summary').count() > 0, true);
+    if (kind === 'ASSISTANT') assert((await details.innerText()).includes('1,234 字思考数据'));
     else assert(!(await details.innerText()).includes('深度'));
     assert(!(await page.locator('body').innerText()).includes('SECRET_'));
     await page.screenshot({ path: join(output, `initial-${kind.toLowerCase()}-${width}.png`), fullPage: true });
@@ -147,12 +150,15 @@ const progress = (phase, elapsedMs, hadThinking = false) => ({ stage: phase === 
     await page.waitForTimeout(350); assert.equal(await details.locator('.process-elapsed').innerText(), elapsed, 'Completed timers freeze');
     assert.equal(writes.length, 1, 'Reconnects cannot submit a second model task');
     assert.equal(writes[0].mode, 'agent'); assert.equal(!!writes[0].persona, kind === 'ROLEPLAY');
-    assert.equal(writes[0].deepThinking, kind === 'ASSISTANT'); assert.equal(writes[0].webSearch, true);
+    assert.equal(writes[0].deepThinking, kind === 'ASSISTANT'); assert.equal(writes[0].webSearch, kind === 'ASSISTANT');
     assert(!writes[0].enabledSkills.includes('web_search'), 'Only the explicit server switch grants network permission');
-    const sourceDetails = page.locator('.web-source-details'); await sourceDetails.locator('summary').click();
+    const sourceDetails = page.locator('.web-source-details');
+    if (kind === 'ASSISTANT') {
+    await sourceDetails.locator('summary').click();
     const source = sourceDetails.getByRole('link', {name: /虚构公开来源/}); await source.waitFor();
     assert.equal(await source.getAttribute('href'), 'https://example.org/source');
     assert.equal(await source.getAttribute('rel'), 'noopener noreferrer');
+    } else assert.equal(await sourceDetails.count(), 0, 'Old roleplay web metadata cannot render network UI');
     assert(!(await page.locator('body').innerText()).includes('UNSAFE_SOURCE'));
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
     await page.screenshot({ path: join(output, `options-sources-${kind.toLowerCase()}-${width}.png`), fullPage: true });

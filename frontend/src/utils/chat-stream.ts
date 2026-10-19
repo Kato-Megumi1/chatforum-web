@@ -5,12 +5,15 @@ import { readSse } from './sse';
 
 export interface RunResult { status: string; error?: string; result?: { content: string; ragMetadata?: any } }
 export type GenerationPhase = 'queued' | 'context' | 'understanding' | 'retrieving' | 'evidence' | 'thinking' | 'generating' | 'tools' | 'verifying' | 'delivering' | 'completed';
+export type GenerationActivity = 'web_search' | 'forum_search' | 'read_files' | 'save_file' | 'preview_html' | 'review_html' | 'repair_html';
 export interface GenerationProgress { stage: 'preparing' | 'generating' | 'tools' | 'verifying' | 'completed';
   elapsedMs: number; firstTokenMs: number | null; stages: Array<{ stage: string; durationMs: number }>;
   phase?: GenerationPhase; phaseElapsedMs?: number; queueMs?: number; modelCalls?: number; activeModelCalls?: number;
-  phases?: Array<{ phase: GenerationPhase; durationMs: number; modelCalls: number }> }
+  phases?: Array<{ phase: GenerationPhase; durationMs: number; modelCalls: number }>;
+  activity?: GenerationActivity; modelOutput?: { thinkingChars: number; textChars: number; toolChars: number; lastDataElapsedMs: number } }
 const stages = ['preparing', 'generating', 'tools', 'verifying', 'completed'] as const;
 const phases: GenerationPhase[] = ['queued', 'context', 'understanding', 'retrieving', 'evidence', 'thinking', 'generating', 'tools', 'verifying', 'delivering', 'completed'];
+const activities: GenerationActivity[] = ['web_search', 'forum_search', 'read_files', 'save_file', 'preview_html', 'review_html', 'repair_html'];
 const time = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER;
 const count = (value: unknown): value is number => time(value) && Number.isSafeInteger(value);
 const object = (value: unknown): value is Record<string, any> => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -27,6 +30,11 @@ export function parseGenerationProgress(value: unknown): GenerationProgress | nu
   if (phases.includes(value.phase)) result.phase = value.phase;
   for (const key of ['phaseElapsedMs', 'queueMs'] as const) if (time(value[key])) result[key] = value[key];
   for (const key of ['modelCalls', 'activeModelCalls'] as const) if (count(value[key])) result[key] = value[key];
+  if (activities.includes(value.activity)) result.activity = value.activity;
+  if (object(value.modelOutput) && ['thinkingChars', 'textChars', 'toolChars', 'lastDataElapsedMs'].every(key => count(value.modelOutput[key])) &&
+      value.modelOutput.lastDataElapsedMs <= value.elapsedMs)
+    result.modelOutput = { thinkingChars: value.modelOutput.thinkingChars, textChars: value.modelOutput.textChars,
+      toolChars: value.modelOutput.toolChars, lastDataElapsedMs: value.modelOutput.lastDataElapsedMs };
   if (Array.isArray(value.phases)) result.phases = value.phases.slice(0, 40).filter(row => {
     if (!object(row) || !phases.includes(row.phase) || !time(row.durationMs) || !count(row.modelCalls) || seenPhases.has(row.phase)) return false;
     seenPhases.add(row.phase); return true;

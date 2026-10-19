@@ -37,7 +37,7 @@ test('old saved settings gain display/send defaults without overwriting their ma
   assert.deepEqual(old, before);
   assert.deepEqual(defaults.conversationResponseOptions({ deepThinking: 'false', webSearch: 'true' }), { deepThinking: true, webSearch: false });
   for (const identity of ['ROLEPLAY', 'LEGACY', 'UNKNOWN'])
-    assert.deepEqual(defaults.conversationResponseOptions({ deepThinking: true, webSearch: true }, identity), { deepThinking: false, webSearch: true });
+    assert.deepEqual(defaults.conversationResponseOptions({ deepThinking: true, webSearch: true }, identity), { deepThinking: false, webSearch: false });
 });
 
 function storeFixture() {
@@ -85,7 +85,7 @@ test('roleplay options are sent independently of tool mode and stay isolated on 
   assert.equal(f.sent[0].deepThinking, false); assert.equal(f.sent[0].webSearch, false); assert.deepEqual(f.sent[0].enabledSkills, []);
   f.store.saveConversationSettings(12, { webSearch: true });
   await f.store.sendConfigured('Synthetic roleplay web', 'normal', [], 'kato_megumi_persona', undefined, 73);
-  assert.equal(f.sent[1].deepThinking, false); assert.equal(f.sent[1].webSearch, true);
+  assert.equal(f.sent[1].deepThinking, false); assert.equal(f.sent[1].webSearch, false);
   f.store.currentConversation = f.conversation;
   await f.store.sendConfigured('Synthetic ordinary', 'normal', []);
   assert.equal(f.sent[2].deepThinking, true); assert.equal(f.sent[2].webSearch, false);
@@ -127,7 +127,7 @@ test('real settings computed values reject busy and roleplay deep-thinking chang
   chatStore.currentConversation = { id: 2, conversationType: 'ROLEPLAY' };
   chatStore.saveConversationSettings(2, { deepThinking: true, webSearch: false });
   assert.equal(deepThinking.value, false); deepThinking.value = true; assert.equal(deepThinking.value, false);
-  webSearch.value = true; assert.equal(webSearch.value, true);
+  webSearch.value = true; assert.equal(webSearch.value, false);
   assert.equal(settings[1].webSearch, true); assert.equal(settings[1].deepThinking, false);
   chatStore.currentConversation = { id: 3, conversationType: 'LEGACY' };
   webSearch.value = true; assert.equal(webSearch.value, false); assert.equal(deepThinking.value, false);
@@ -163,6 +163,7 @@ test('ordinary options use one settings popover, roleplay has no deep control, a
   assert.equal(/设置中的对话模型/.test(composer), false);
   const drawer = chat.match(/<el-drawer v-model="showSettings"[\s\S]*?<\/el-drawer>/)[0];
   assert.match(drawer, /<div v-if="isAssistant" class="response-setting-row">[\s\S]*?深度思考/);
+  assert.match(drawer, /<div v-if="isAssistant" class="response-settings">/);
   assert.match(drawer, /<el-switch v-model="deepThinking" aria-label="深度思考" :disabled="chatStore\.isStreaming \|\| uploadingFiles"/);
   assert.match(drawer, /<el-switch v-model="webSearch" aria-label="联网搜索" :disabled="chatStore\.isStreaming \|\| uploadingFiles"/);
   assert.match(drawer, /联网搜索/);

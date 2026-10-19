@@ -15,7 +15,7 @@ export interface ConversationSettings {
 export function conversationResponseOptions(settings?: Pick<ConversationSettings, 'deepThinking' | 'webSearch'>, conversationType = 'ASSISTANT') {
   return {
     deepThinking: conversationType === 'ASSISTANT' && (typeof settings?.deepThinking === 'boolean' ? settings.deepThinking : true),
-    webSearch: typeof settings?.webSearch === 'boolean' ? settings.webSearch : false,
+    webSearch: conversationType === 'ASSISTANT' && settings?.webSearch === true,
   };
 }
 

@@ -91,9 +91,9 @@ test('rendered failure hints distinguish no usable results from partial results'
   assert.doesNotMatch(empty, /联网来源|联网搜索暂不可用/);
 });
 
-test('both ordinary and roleplay answers wire source metadata separately from original novel citations', () => {
+test('only ordinary answers display web metadata, separately from original novel citations', () => {
   const chat = readFileSync(join(__dirname, '../src/views/Chat.vue'), 'utf8');
-  assert.match(chat, /<WebSearchSources v-if="msg\.role === 'assistant' && !msg\.pending" :metadata="msg\.ragMetadata\?\.webSearch"/);
+  assert.match(chat, /<WebSearchSources v-if="isAssistant && msg\.role === 'assistant' && !msg\.pending" :metadata="msg\.ragMetadata\?\.webSearch"/);
   assert.match(chat, /<RagEvidence v-if="msg\.role === 'assistant'" :metadata="msg\.ragMetadata"/);
   assert.match(componentSource, /prefers-reduced-motion:reduce/); assert.match(componentSource, /summary:focus-visible/);
 });

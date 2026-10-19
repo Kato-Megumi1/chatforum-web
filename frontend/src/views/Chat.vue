@@ -160,7 +160,7 @@
             class="chat-message"
             :class="msg.role"
           >
-            <div class="message-avatar">
+            <div v-if="!msg.failure" class="message-avatar">
               <div v-if="msg.role === 'user'" class="avatar-inner user-avatar-bg">
                 <el-icon :size="18"><User /></el-icon>
               </div>
@@ -171,9 +171,17 @@
               </div>
             </div>
             <div class="message-body">
-              <div class="message-role">{{ msg.role === 'user' ? userDisplayName : messageIdentity(msg) }}</div>
+              <div v-if="!msg.failure" class="message-role">{{ msg.role === 'user' ? userDisplayName : messageIdentity(msg) }}</div>
               <MessageAttachments v-if="isAssistant && msg.role==='user' && msg.ragMetadata?.messageAttachments?.length" :conversation-id="msg.conversationId" :files="msg.ragMetadata.messageAttachments" />
-              <div v-if="msg.content || msg.role!=='user'" class="message-bubble" :class="[msg.role, { 'thinking-bubble': msg.pending && !msg.content }]">
+              <div v-if="msg.failure" class="generation-failure" role="alert">
+                <div class="failure-heading"><strong>{{ msg.failure.cancelled ? '已停止生成' : '回答未生成' }}</strong><span>{{ (msg.failure.elapsedMs / 1000).toFixed(1) }} 秒</span></div>
+                <p v-if="msg.failure.message !== '已停止生成'">{{ msg.failure.message }}</p>
+                <div class="failure-actions">
+                  <el-button v-if="msg.failure.retryable" size="small" type="primary" plain :disabled="chatStore.isStreaming" @click="retryFailedAnswer(msg)">重新发送</el-button>
+                  <el-button size="small" text :disabled="chatStore.isStreaming" @click="chatStore.dismissFailedAttempt(msg.conversationId)">移除</el-button>
+                </div>
+              </div>
+              <div v-else-if="msg.content || msg.role!=='user'" class="message-bubble" :class="[msg.role, { 'thinking-bubble': msg.pending && !msg.content }]">
                 <span v-if="msg.pending && !msg.content" class="typing-indicator" role="status" aria-label="正在思考"></span>
                 <template v-else>
                 <div v-if="hasToolResults(msg.content)" class="tool-results">
@@ -188,15 +196,15 @@
                 </div>
                 <div class="message-text" v-html="renderMarkdown(getCleanContent(msg.content))"></div>
                 <RagEvidence v-if="msg.role === 'assistant'" :metadata="msg.ragMetadata" />
-                <WebSearchSources v-if="msg.role === 'assistant' && !msg.pending" :metadata="msg.ragMetadata?.webSearch" />
+                <WebSearchSources v-if="isAssistant && msg.role === 'assistant' && !msg.pending" :metadata="msg.ragMetadata?.webSearch" />
                 <FileArtifacts v-if="isAssistant" :conversation-id="chatStore.currentConversation!.id" :artifacts="msg.ragMetadata?.fileArtifacts" />
                 </template>
               </div>
-              <GenerationStatus v-if="msg.role === 'assistant'" :pending="msg.pending" :busy="chatStore.isStreaming"
+              <GenerationStatus v-if="msg.role === 'assistant' && !msg.failure" :pending="msg.pending" :busy="chatStore.isStreaming"
                 :progress="msg.ragMetadata?.performance" :generation="isAssistant ? msg.ragMetadata?.generation : undefined"
-                :deep-thinking="isAssistant && msg.ragMetadata?.responseOptions?.deepThinking === true" @continue="continueAnswer(msg)" />
+                :allow-thinking="isAssistant" @continue="continueAnswer(msg)" />
               <div
-                v-if="msg.content && !msg.pending"
+                v-if="msg.content && !msg.pending && !msg.localAttempt"
                 class="message-actions"
                 :class="{ 'is-pinned': clickedMsgId === msg.id }"
                 @click.stop="clickedMsgId = clickedMsgId === msg.id ? null : msg.id"
@@ -269,7 +277,7 @@
               :value="model.id" :disabled="!model.available" />
           </el-select>
         </el-form-item>
-        <div v-if="!isLegacy" class="response-settings">
+        <div v-if="isAssistant" class="response-settings">
           <div v-if="isAssistant" class="response-setting-row">
             <label id="thinking-setting-label">深度思考</label>
             <el-switch v-model="deepThinking" aria-label="深度思考" :disabled="chatStore.isStreaming || uploadingFiles" />
@@ -451,11 +459,12 @@ const deepThinking = computed({
 });
 const webSearch = computed({
   get: () => {
+    if (!isAssistant.value) return false;
     const cid = chatStore.currentConversation?.id;
     return cid ? conversationResponseOptions(chatStore.getConversationSettings(cid)).webSearch : draftWebSearch.value;
   },
   set: (value: boolean) => {
-    if (chatStore.isStreaming || uploadingFiles.value || isLegacy.value) return;
+    if (chatStore.isStreaming || uploadingFiles.value || !isAssistant.value) return;
     const cid = chatStore.currentConversation?.id;
     if (cid) chatStore.saveConversationSettings(cid, { webSearch: value });
     else draftWebSearch.value = value;
@@ -775,6 +784,18 @@ const handleNewChat = async () => {
 };
 
 let sendingLock = false;
+const retryFailedAnswer = async (message: any) => {
+  if (sendingLock || chatStore.isStreaming || uploadingFiles.value || message.conversationId !== chatStore.currentConversation?.id) return;
+  const attempt = chatStore.failedAttempts[message.conversationId];
+  if (!attempt || attempt.reply.id !== message.id || !attempt.reply.failure?.retryable) return;
+  const text = attempt.question.content, files: ChatFile[] = attempt.question.ragMetadata?.messageAttachments || [];
+  if (inputText.value && inputText.value.trim() !== text || pendingFiles.value.length && !sameDraftFiles(pendingFiles.value, files)) {
+    ElMessage.info('请先发送或清空当前草稿，再重新发送'); return;
+  }
+  inputText.value = text;
+  chatStore.draftAttachments[message.conversationId] = files.map(file => ({ ...file }));
+  await handleSendMessage();
+};
 const continueAnswer = async (message: any) => {
   if (chatStore.isStreaming || !isAssistant.value || inputText.value.trim() || pendingFiles.value.length) {
     if (!chatStore.isStreaming) ElMessage.info('请先发送或清空当前草稿，再继续生成');
@@ -1435,6 +1456,13 @@ onMounted(async () => {
 .message-bubble {
   transition: all 0.2s ease;
 }
+
+.generation-failure { width: min(430px, 100%); box-sizing: border-box; padding: 14px 16px; border: 1px solid #e2c9bd; border-radius: 12px; background: #fffaf6; color: #674b3c; overflow-wrap: anywhere; }
+.failure-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; font-size: 14px; }
+.failure-heading span { flex: none; font-size: 12px; color: #8c7264; font-variant-numeric: tabular-nums; }
+.generation-failure p { margin: 8px 0 12px; font-size: 13px; line-height: 1.65; }
+.failure-actions { display: flex; gap: 8px; margin-top: 12px; }
+.failure-actions .el-button + .el-button { margin-left: 0; }
 
 .message-bubble:hover {
   transform: translateY(-1px);

@@ -62,3 +62,16 @@ test('public progress keeps only valid timing and phase counters, never arbitrar
   assert.equal(module.parseGenerationProgress({ stage: 'private', elapsedMs: 0 }), null);
   assert.equal(module.parseGenerationProgress({ stage: 'generating', elapsedMs: Infinity }), null);
 });
+
+test('activity and live output telemetry cannot carry model text or tool arguments', () => {
+  const module = load('chat-stream', { './api': {}, './request': {}, '@/stores/user': {}, './sse': {} });
+  const input = { stage: 'generating', phase: 'thinking', elapsedMs: 77000, firstTokenMs: null, activity: 'preview_html',
+    modelOutput: { thinkingChars: 1200, textChars: 0, toolChars: 300, lastDataElapsedMs: 76900,
+      reasoning_content: 'SECRET_THOUGHTS', arguments: 'SECRET_FILE' } };
+  const value = module.parseGenerationProgress(input);
+  assert.equal(value.activity, 'preview_html');
+  assert.deepEqual(value.modelOutput, { thinkingChars: 1200, textChars: 0, toolChars: 300, lastDataElapsedMs: 76900 });
+  assert(!JSON.stringify(value).includes('SECRET_'));
+  assert.equal(module.parseGenerationProgress({ ...input, activity: 'SECRET_STATUS' }).activity, undefined);
+  assert.equal(module.parseGenerationProgress({ ...input, modelOutput: { ...input.modelOutput, textChars: -1 } }).modelOutput, undefined);
+});

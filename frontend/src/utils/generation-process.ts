@@ -1,5 +1,10 @@
 // Public progress is telemetry, not model reasoning. Never forward server-supplied
 // labels, descriptions, tool arguments or model text into this presentation model.
+const activityDescriptions: Record<string, string> = {
+  web_search: '正在搜索网页并整理来源', forum_search: '正在查询社区帖子', read_files: '正在读取本次会话中的文件',
+  save_file: '正在保存生成的文件', preview_html: '正在生成手机和桌面的页面预览',
+  review_html: '正在检查页面预览中的布局和画面', repair_html: '正在修复预览发现的页面问题',
+};
 const phaseDefinitions = {
   queued: { label: '等待开始', description: '请求已提交，正在等待处理' },
   context: { label: '整理上下文', description: '读取本轮消息和最近对话，整理回答所需信息' },
@@ -38,13 +43,13 @@ export interface GenerationProcessPhase {
   active: boolean;
 }
 
-export function generationProcessView(input: unknown, pending: boolean, extensionMs = 0, deepThinking = false) {
+export function generationProcessView(input: unknown, pending: boolean, extensionMs = 0, allowThinking = false) {
   const source = record(input);
   const elapsed = duration(source?.elapsedMs);
   const receivedPhase = elapsed !== null ? phaseKey(source?.phase) || legacyKey(source?.stage) : undefined;
-  // Only an ASSISTANT request whose server-normalized options enabled thinking may use the
-  // thinking presentation. ROLEPLAY/LEGACY must not inherit it from stale or hostile metadata.
-  const phase = receivedPhase === 'thinking' && !deepThinking ? legacyKey(source?.stage) : receivedPhase;
+  // The actual server phase is authoritative for ASSISTANT, even when old message
+  // option metadata is absent. ROLEPLAY/LEGACY never inherit thinking presentation.
+  const phase = receivedPhase === 'thinking' && !allowThinking ? legacyKey(source?.stage) : receivedPhase;
   const hasProgress = phase !== undefined;
   // A terminal snapshot never advances, even if a delayed pending flag is still true.
   const extra = hasProgress && phase !== 'completed' ? duration(extensionMs) ?? 0 : 0;
@@ -58,7 +63,7 @@ export function generationProcessView(input: unknown, pending: boolean, extensio
     const row = record(item);
     const key = phaseKey(row?.phase) || legacyKey(row?.stage);
     const ms = duration(row?.durationMs);
-    if (!key || key === 'completed' || key === 'thinking' && !deepThinking || ms === null || seen.has(key)) continue;
+    if (!key || key === 'completed' || key === 'thinking' && !allowThinking || ms === null || seen.has(key)) continue;
     seen.add(key);
     phases.push({ phase: key, label: phaseDefinitions[key].label, description: phaseDefinitions[key].description,
       durationMs: Math.min(Number.MAX_SAFE_INTEGER, ms + (key === phase ? extra : 0)),
@@ -76,8 +81,20 @@ export function generationProcessView(input: unknown, pending: boolean, extensio
   const generatingIndex = phases.findIndex(row => row.phase === 'generating');
   if (generatingIndex >= 0 && thinkingIndex > generatingIndex)
     phases.splice(generatingIndex, 0, phases.splice(thinkingIndex, 1)[0]);
+  const output = record(source?.modelOutput);
+  const thinkingChars = allowThinking ? count(output?.thinkingChars) || 0 : 0;
+  const textChars = count(output?.textChars) || 0, toolChars = count(output?.toolChars) || 0;
+  const receivedChars = thinkingChars + textChars + toolChars;
+  const activity = typeof source?.activity === 'string' && Object.prototype.hasOwnProperty.call(activityDescriptions, source.activity) ? activityDescriptions[source.activity] : '';
+  const summary = pending && activity ? activity : receivedChars
+    ? pending && phase === 'thinking' ? `模型正在分析本次请求，已收到 ${thinkingChars.toLocaleString('zh-CN')} 字思考数据`
+      : `已收到 ${receivedChars.toLocaleString('zh-CN')} 字模型数据${pending ? '，正在继续处理' : ''}`
+    : pending && (count(source?.activeModelCalls) || 0) > 0 ? '请求已送达模型，等待返回数据' : '';
+  const lastData = duration(output?.lastDataElapsedMs);
+  const lastDataAgeMs = pending && receivedChars && lastData !== null && elapsedMs !== null
+    ? Math.max(0, elapsedMs - lastData) : null;
   return {
-    hasProgress, phase, elapsedMs, firstTokenMs, phases,
+    hasProgress, phase, elapsedMs, firstTokenMs, phases, summary, lastDataAgeMs,
     label: pending
       ? phase === 'thinking' ? '深度思考中'
         : phase ? phaseDefinitions[phase].label : '等待中'
