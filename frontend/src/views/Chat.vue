@@ -193,7 +193,8 @@
                 </template>
               </div>
               <GenerationStatus v-if="msg.role === 'assistant'" :pending="msg.pending" :busy="chatStore.isStreaming"
-                :progress="msg.ragMetadata?.performance" :generation="isAssistant ? msg.ragMetadata?.generation : undefined" @continue="continueAnswer(msg)" />
+                :progress="msg.ragMetadata?.performance" :generation="isAssistant ? msg.ragMetadata?.generation : undefined"
+                :deep-thinking="isAssistant && msg.ragMetadata?.responseOptions?.deepThinking === true" @continue="continueAnswer(msg)" />
               <div
                 v-if="msg.content && !msg.pending"
                 class="message-actions"

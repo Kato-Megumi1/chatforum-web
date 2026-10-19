@@ -13,10 +13,11 @@ const conversations = [
   { id: 11002, title: 'Synthetic roleplay', conversationType: 'ROLEPLAY', personaKey: 'kato_megumi_persona', personaLabel: '加藤惠' },
 ].map(row => ({ ...row, userId: user.id, updatedAt: '2026-10-19T02:00:00Z' }));
 const gate = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
-const progress = (phase, elapsedMs) => ({ stage: phase === 'verifying' ? 'verifying' : phase === 'completed' ? 'completed' : 'generating', phase,
+const progress = (phase, elapsedMs, hadThinking = false) => ({ stage: phase === 'verifying' ? 'verifying' : phase === 'completed' ? 'completed' : 'generating', phase,
   elapsedMs, firstTokenMs: null, phaseElapsedMs: elapsedMs - 1000, queueMs: 200, modelCalls: phase === 'generating' ? 1 : 2,
   activeModelCalls: phase === 'completed' ? 0 : 1, stages: [],
   phases: [{ phase: 'queued', durationMs: 200, modelCalls: 0 }, { phase: 'context', durationMs: 800, modelCalls: 0 },
+    ...(hadThinking && phase !== 'thinking' ? [{ phase: 'thinking', durationMs: 46000, modelCalls: 1 }] : []),
     { phase, durationMs: elapsedMs - 1000, modelCalls: phase === 'generating' ? 1 : 2 }],
   reasoning_content: 'SECRET_INNER_REASONING', system: 'SECRET_SYSTEM_PROMPT' });
 
@@ -29,7 +30,7 @@ const progress = (phase, elapsedMs) => ({ stage: phase === 'verifying' ? 'verify
     const cid = kind === 'ASSISTANT' ? 11001 : 11002;
     let reads = 0, completed = false;
     const content = '虚构的最终回答，只有核验后的正文。';
-    const metadata = { state: kind === 'ASSISTANT' ? 'general' : 'roleplay', performance: progress('completed', 90200),
+    const metadata = { state: kind === 'ASSISTANT' ? 'general' : 'roleplay', performance: progress('completed', 90200, kind === 'ASSISTANT'),
       responseOptions: { deepThinking: kind === 'ASSISTANT', webSearch: true }, webSearch: { enabled: true, sources: [
         {title:'虚构公开来源',url:'https://example.org/source',snippet:'只来自搜索摘要，不冒称已读取全文。',engine:'Bing',retrievedAt:'2026-10-19T01:00:00Z'},
         {title:'UNSAFE_SOURCE',url:'javascript:alert(1)',snippet:'must not render'},
@@ -50,7 +51,7 @@ const progress = (phase, elapsedMs) => ({ stage: phase === 'verifying' ? 'verify
         const step = reads++;
         if (step === 1) await middle.promise;
         if (step >= 2) await finish.promise;
-        if (step < 2) return route.fulfill({ contentType: 'text/event-stream', body: 'event: progress\ndata: ' + JSON.stringify(progress(step ? 'verifying' : 'generating', step ? 80000 : 47000)) + '\n\n' });
+        if (step < 2) return route.fulfill({ contentType: 'text/event-stream', body: 'event: progress\ndata: ' + JSON.stringify(progress(step ? 'verifying' : kind === 'ASSISTANT' ? 'thinking' : 'generating', step ? 80000 : 47000, kind === 'ASSISTANT')) + '\n\n' });
         completed = true;
         return route.fulfill({ contentType: 'text/event-stream', body:
           'event: delta\ndata: ' + JSON.stringify({ text: content, offset: content.length }) + '\n\n' +
@@ -111,7 +112,7 @@ const progress = (phase, elapsedMs) => ({ stage: phase === 'verifying' ? 'verify
     await page.locator('.chat-textarea textarea').fill('虚构请求');
     await page.getByRole('button', { name: '发送消息', exact: true }).click();
     const details = page.locator('details.generation-process');
-    await details.locator('.process-current').getByText('生成回答', { exact: true }).waitFor();
+    await details.locator('.process-current').getByText(kind === 'ASSISTANT' ? '深度思考中' : '生成回答', { exact: true }).waitFor();
     await openSettings();
     if (kind === 'ASSISTANT') assert(await thinking.isDisabled());
     else assert.equal(await thinking.count(), 0);
@@ -120,9 +121,13 @@ const progress = (phase, elapsedMs) => ({ stage: phase === 'verifying' ? 'verify
     await details.locator('.process-body').waitFor();
     assert.equal(await details.evaluate(el => el.open), true);
     assert.equal(await page.locator('.typing-indicator').count(), 1, 'One pending bubble, not duplicate process replies');
-    assert.equal(await details.locator('.process-description,.model-active,.process-metrics').count(), 0);
+    assert.equal(await details.locator('.model-active,.process-metrics').count(), 0);
     assert.equal(await details.locator('.process-phases li').count() > 0, true);
+    assert.equal(await details.locator('.phase-description').count() > 0, true);
+    if (kind === 'ASSISTANT') assert((await details.innerText()).includes('分析问题并形成回答思路'));
+    else assert(!(await details.innerText()).includes('深度'));
     assert(!(await page.locator('body').innerText()).includes('SECRET_'));
+    await page.screenshot({ path: join(output, `initial-${kind.toLowerCase()}-${width}.png`), fullPage: true });
     middle.resolve();
     await details.locator('.process-current').getByText('核对依据', { exact: true }).waitFor();
     assert.equal(await details.evaluate(el => el.open), true, 'Progress updates preserve the expanded process');
@@ -137,6 +142,7 @@ const progress = (phase, elapsedMs) => ({ stage: phase === 'verifying' ? 'verify
     });
     if (!await details.evaluate(el => el.open)) await details.locator('summary').click();
     await details.locator('.process-body').waitFor();
+    assert.equal(await details.locator('.process-current').innerText(), kind === 'ASSISTANT' ? '深度思考完成' : '已完成');
     const elapsed = await details.locator('.process-elapsed').innerText();
     await page.waitForTimeout(350); assert.equal(await details.locator('.process-elapsed').innerText(), elapsed, 'Completed timers freeze');
     assert.equal(writes.length, 1, 'Reconnects cannot submit a second model task');

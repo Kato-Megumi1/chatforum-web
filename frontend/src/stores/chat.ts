@@ -11,7 +11,7 @@ import { conversationResponseOptions, ensureConversationSettings, type Conversat
 interface Conversation { id: number; title: string; isPinned: boolean; userId: number; createdAt: string; updatedAt: string;
   conversationType: 'ASSISTANT' | 'ROLEPLAY' | 'LEGACY'; personaKey?: string; personaLabel?: string;
   customPersonaPrompt?: string; sharedMemory?: boolean }
-interface Message { id: number; role: 'system' | 'user' | 'assistant'; content: string; reasoningContent?: string;
+interface Message { id: number; role: 'system' | 'user' | 'assistant'; content: string;
   ragMetadata?: any; conversationId: number; createdAt: string; pending?: boolean }
 interface ChatModel { id: string; label: string; available: boolean; unavailableReason: string | null }
 interface Run { id: string; status: string; error?: string; result?: { content: string; ragMetadata?: any } }
@@ -154,13 +154,14 @@ export const useChatStore = defineStore('chat', () => {
       pendingQuestion.value = { id: -Date.now(), role: 'user', content: question,
         conversationId: cid, createdAt: new Date().toISOString(),
         ...(attachments?.files.length?{ragMetadata:{messageAttachments:attachments.files}}:{}) };
+      const responseOptions = conversationResponseOptions(getConversationSettings(cid), currentConversation.value?.conversationType);
       pendingReply.value = { id: -Date.now() - 1, role: 'assistant', content: '', pending: true,
-        conversationId: cid, createdAt: new Date().toISOString() };
+        conversationId: cid, createdAt: new Date().toISOString(), ragMetadata: { responseOptions } };
       messages.value.push(pendingQuestion.value, pendingReply.value);
       // Admit once; subscribe/reconnect to the durable run without repeating model calls.
       const run = await request.post<Run>('/chat/runs', { requestId: crypto.randomUUID(),
         conversationId: cid, question, mode, enabledSkills: enabledSkills?.filter(skill => skill !== 'web_search'),
-        ...conversationResponseOptions(getConversationSettings(cid), currentConversation.value?.conversationType), codingWorkspaceId, persona: persona || undefined,
+        ...responseOptions, codingWorkspaceId, persona: persona || undefined,
         attachments:attachments?.files.length?attachments.files.map(chatFileRef):undefined,
         customSystemPrompt: customSystemPrompt || undefined, knowledgeBaseId: knowledgeBaseId || undefined,
         modelId: selectedModelId(cid) });

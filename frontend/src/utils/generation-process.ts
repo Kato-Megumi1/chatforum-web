@@ -1,16 +1,17 @@
 // Public progress is telemetry, not model reasoning. Never forward server-supplied
 // labels, descriptions, tool arguments or model text into this presentation model.
 const phaseDefinitions = {
-  queued: '等待开始',
-  context: '整理上下文',
-  understanding: '理解问题',
-  retrieving: '检索原文',
-  evidence: '整理依据',
-  generating: '生成回答',
-  tools: '处理任务',
-  verifying: '核对依据',
-  delivering: '输出回答',
-  completed: '已完成',
+  queued: { label: '等待开始', description: '请求已提交，正在等待处理' },
+  context: { label: '整理上下文', description: '读取本轮消息和最近对话，整理回答所需信息' },
+  understanding: { label: '理解问题', description: '确认问题重点和需要完成的任务' },
+  retrieving: { label: '检索原文', description: '从当前有权限的资料中查找相关内容' },
+  evidence: { label: '整理依据', description: '筛选能支持回答的内容和引用' },
+  thinking: { label: '深度思考', description: '分析问题并形成回答思路' },
+  generating: { label: '生成回答', description: '分析问题并组织回答' },
+  tools: { label: '处理任务', description: '执行已启用的工具并整理结果' },
+  verifying: { label: '核对依据', description: '检查回答是否切题，并核对结果与依据' },
+  delivering: { label: '输出回答', description: '保存并发送最终回答' },
+  completed: { label: '已完成', description: '回答已完成' },
 } as const;
 
 export type PublicGenerationPhase = keyof typeof phaseDefinitions;
@@ -31,15 +32,19 @@ const legacyKey = (value: unknown): PublicGenerationPhase | undefined =>
 export interface GenerationProcessPhase {
   phase: PublicGenerationPhase;
   label: string;
+  description: string;
   durationMs: number | null;
   modelCalls: number | null;
   active: boolean;
 }
 
-export function generationProcessView(input: unknown, pending: boolean, extensionMs = 0) {
+export function generationProcessView(input: unknown, pending: boolean, extensionMs = 0, deepThinking = false) {
   const source = record(input);
   const elapsed = duration(source?.elapsedMs);
-  const phase = elapsed !== null ? phaseKey(source?.phase) || legacyKey(source?.stage) : undefined;
+  const receivedPhase = elapsed !== null ? phaseKey(source?.phase) || legacyKey(source?.stage) : undefined;
+  // Only an ASSISTANT request whose server-normalized options enabled thinking may use the
+  // thinking presentation. ROLEPLAY/LEGACY must not inherit it from stale or hostile metadata.
+  const phase = receivedPhase === 'thinking' && !deepThinking ? legacyKey(source?.stage) : receivedPhase;
   const hasProgress = phase !== undefined;
   // A terminal snapshot never advances, even if a delayed pending flag is still true.
   const extra = hasProgress && phase !== 'completed' ? duration(extensionMs) ?? 0 : 0;
@@ -53,21 +58,30 @@ export function generationProcessView(input: unknown, pending: boolean, extensio
     const row = record(item);
     const key = phaseKey(row?.phase) || legacyKey(row?.stage);
     const ms = duration(row?.durationMs);
-    if (!key || key === 'completed' || ms === null || seen.has(key)) continue;
+    if (!key || key === 'completed' || key === 'thinking' && !deepThinking || ms === null || seen.has(key)) continue;
     seen.add(key);
-    phases.push({ phase: key, label: phaseDefinitions[key],
+    phases.push({ phase: key, label: phaseDefinitions[key].label, description: phaseDefinitions[key].description,
       durationMs: Math.min(Number.MAX_SAFE_INTEGER, ms + (key === phase ? extra : 0)),
       modelCalls: count(row?.modelCalls), active: pending && key === phase });
   }
   if (phase && phase !== 'completed' && !seen.has(phase)) {
     const phaseMs = duration(source?.phaseElapsedMs);
-    phases.push({ phase, label: phaseDefinitions[phase],
+    phases.push({ phase, label: phaseDefinitions[phase].label, description: phaseDefinitions[phase].description,
       durationMs: phaseMs === null ? null : Math.min(Number.MAX_SAFE_INTEGER, phaseMs + extra),
       modelCalls: null, active: pending });
   }
+  // Durations aggregate repeated phases. The model-call wait starts as generating,
+  // so group confirmed thinking before answer generation for the process display.
+  const thinkingIndex = phases.findIndex(row => row.phase === 'thinking');
+  const generatingIndex = phases.findIndex(row => row.phase === 'generating');
+  if (generatingIndex >= 0 && thinkingIndex > generatingIndex)
+    phases.splice(generatingIndex, 0, phases.splice(thinkingIndex, 1)[0]);
   return {
     hasProgress, phase, elapsedMs, firstTokenMs, phases,
-    label: pending ? phase ? phaseDefinitions[phase] : '等待中' : '已结束',
+    label: pending
+      ? phase === 'thinking' ? '深度思考中'
+        : phase ? phaseDefinitions[phase].label : '等待中'
+      : phases.some(row => row.phase === 'thinking') ? '深度思考完成' : '已完成',
     modelCalls: hasProgress ? count(source?.modelCalls) : null,
     activeModelCalls: hasProgress && pending && phase !== 'completed' ? count(source?.activeModelCalls) : null,
     queueMs: hasProgress ? duration(source?.queueMs) : null,

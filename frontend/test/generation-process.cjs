@@ -22,8 +22,8 @@ test('only received public phases, numeric timings and counts enter the process 
   assert.equal(view.elapsedMs, 2500); assert.equal(view.firstTokenMs, null);
   assert.equal(view.queueMs, 200); assert.equal(view.modelCalls, 3); assert.equal(view.activeModelCalls, 1);
   assert.deepEqual(view.phases, [
-    { phase: 'context', label: '整理上下文', durationMs: 100, modelCalls: 0, active: false },
-    { phase: 'retrieving', label: '检索原文', durationMs: 1200, modelCalls: 3, active: true },
+    { phase: 'context', label: '整理上下文', description: '读取本轮消息和最近对话，整理回答所需信息', durationMs: 100, modelCalls: 0, active: false },
+    { phase: 'retrieving', label: '检索原文', description: '从当前有权限的资料中查找相关内容', durationMs: 1200, modelCalls: 3, active: true },
   ]);
   assert.doesNotMatch(JSON.stringify(view), /SECRET_|unknown|999999/);
 });
@@ -57,7 +57,7 @@ test('bad detail values are discarded without interpolating strings or NaN', () 
   }, true, NaN);
   assert.equal(view.elapsedMs, 800); assert.equal(view.firstTokenMs, null);
   assert.equal(view.modelCalls, null); assert.equal(view.activeModelCalls, null); assert.equal(view.queueMs, null);
-  assert.deepEqual(view.phases, [{ phase: 'tools', label: '处理任务', durationMs: 100, modelCalls: null, active: true }]);
+  assert.deepEqual(view.phases, [{ phase: 'tools', label: '处理任务', description: '执行已启用的工具并整理结果', durationMs: 100, modelCalls: null, active: true }]);
   assert.equal(generationSeconds(1234), '1.2'); assert.equal(generationSeconds(NaN), '0.0');
 });
 
@@ -68,14 +68,14 @@ test('completed snapshots never tick or mark every earlier step successful', () 
   assert.equal(view.elapsedMs, 2300); assert.equal(view.phases[0].durationMs, 600);
   assert.equal(view.phases[0].active, false); assert.equal(view.activeModelCalls, null);
   const stopped = generationProcessView({ stage: 'verifying', elapsedMs: 2300, stages: [] }, false);
-  assert.equal(stopped.label, '已结束'); assert.equal(stopped.activeModelCalls, null);
+  assert.equal(stopped.label, '已完成'); assert.equal(stopped.activeModelCalls, null);
   assert.equal(stopped.phases[0].active, false); assert.equal(stopped.phases[0].durationMs, null);
 });
 
 function componentFixture() {
   const source = readFileSync(join(__dirname, '../src/components/GenerationStatus.vue'), 'utf8');
   const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1];
-  const props = vue.reactive({ pending: true, progress: undefined, busy: false });
+  const props = vue.reactive({ pending: true, progress: undefined, busy: false, deepThinking: false });
   const mounts = [], unmounts = [], timers = new Map(); let clock = 10000, nextTimer = 0;
   const imports = { vue: { ...vue, onMounted: fn => mounts.push(fn), onUnmounted: fn => unmounts.push(fn) },
     '@/utils/generation-process': helperModule.exports };
@@ -102,7 +102,7 @@ test('component extends a pending sample, resets on server updates and freezes a
   await vue.nextTick(); assert.equal(f.view.value.elapsedMs, 3000);
   f.advance(1000); assert.equal(f.view.value.elapsedMs, 4000); assert.equal(f.timers.size, 1);
   f.props.pending = false; await vue.nextTick(); assert.equal(f.timers.size, 0);
-  f.advance(90000); assert.equal(f.view.value.elapsedMs, 4000); assert.equal(f.view.value.label, '已结束');
+  f.advance(90000); assert.equal(f.view.value.elapsedMs, 4000); assert.equal(f.view.value.label, '已完成');
   assert.equal(f.view.value.phases[0].active, false);
 });
 
@@ -121,8 +121,40 @@ test('waiting and finished views share a keyboard-native disclosure with fixed t
   assert.match(f.source, /<details v-if="view\.phases\.length"/);
   assert.match(f.source, /v-else class="process-compact"/);
   assert.match(f.source, /<summary aria-label="处理过程">/);
-  assert.doesNotMatch(f.source, /process-description|process-metrics|model-active|首段输出|次调用/);
+  assert.match(f.source, /phase-description/);
+  assert.doesNotMatch(f.source, /process-metrics|model-active|首段输出|次调用/);
   assert.match(f.source, /summary:focus-visible/); assert.match(f.source, /prefers-reduced-motion:reduce/);
   assert.doesNotMatch(f.source, /v-html|reasoning_content|chain_of_thought|思考链/);
   assert.match(f.source, /generation\?\.truncated && generation\?\.canContinue/);
+});
+
+test('enabling deep thinking alone cannot claim the provider actually emitted reasoning', () => {
+  const input = { phase: 'generating', stage: 'generating', elapsedMs: 1200, phaseElapsedMs: 1200,
+    phases: [{ phase: 'generating', durationMs: 1200, modelCalls: 1 }],
+    summary: 'SECRET_SUMMARY', description: 'SECRET_DESCRIPTION', reasoning_content: 'SECRET_REASONING' };
+  const normal = generationProcessView(input, true, 0, false);
+  const deep = generationProcessView(input, true, 0, true);
+  assert.equal(normal.label, '生成回答'); assert.equal(normal.phases[0].description, '分析问题并组织回答');
+  assert.equal(deep.label, '生成回答'); assert.equal(deep.phases[0].description, '分析问题并组织回答');
+  assert.equal(generationProcessView(input, false, 0, true).label, '已完成');
+  assert.doesNotMatch(JSON.stringify(deep), /SECRET_/);
+});
+
+test('a provider-confirmed thinking phase has its own public summary', () => {
+  const view = generationProcessView({ phase: 'thinking', stage: 'generating', elapsedMs: 4200, phaseElapsedMs: 4000,
+    phases: [{ phase: 'context', durationMs: 200, modelCalls: 0 }, { phase: 'thinking', durationMs: 4000, modelCalls: 1 }] }, true, 0, true);
+  assert.equal(view.label, '深度思考中');
+  assert.equal(generationProcessView({ phase: 'completed', elapsedMs: 4200,
+    phases: [{ phase: 'thinking', durationMs: 4000 }] }, false, 0, true).label, '深度思考完成');
+  const generating = generationProcessView({ phase: 'generating', elapsedMs: 5000,
+    phases: [{ phase: 'context', durationMs: 200 }, { phase: 'generating', durationMs: 800 },
+      { phase: 'thinking', durationMs: 4000 }] }, true, 0, true);
+  assert.equal(generating.label, '生成回答');
+  assert.deepEqual(generating.phases.map(row => row.phase), ['context', 'thinking', 'generating']);
+  assert.deepEqual(view.phases.at(-1), { phase: 'thinking', label: '深度思考', description: '分析问题并形成回答思路',
+    durationMs: 4000, modelCalls: 1, active: true });
+  const roleplay = generationProcessView({ phase: 'thinking', stage: 'generating', elapsedMs: 4200,
+    phases: [{ phase: 'thinking', durationMs: 4000, modelCalls: 1 }] }, true, 0, false);
+  assert.equal(roleplay.label, '生成回答'); assert.equal(roleplay.phases.some(row => row.phase === 'thinking'), false);
+  assert.doesNotMatch(JSON.stringify(roleplay), /深度思考/);
 });

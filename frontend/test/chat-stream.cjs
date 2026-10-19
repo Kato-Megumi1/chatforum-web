@@ -37,7 +37,7 @@ test('progress frames stay separate from answer text and survive normal completi
   });
   const progress = {stage:'verifying',elapsedMs:1700,firstTokenMs:null,stages:[]};
   t.mock.method(globalThis,'fetch',async()=>new Response(
-    'event: progress\ndata: '+JSON.stringify(progress)+'\n\nevent: delta\ndata: {"text":"回答","offset":2}\n\nevent: complete\ndata: {"status":"COMPLETED","result":{"content":"回答"}}\n\n',
+    'event: progress\ndata: '+JSON.stringify(progress)+'\n\nevent: reasoning\ndata: {"text":"SECRET_REASONING"}\n\nevent: delta\ndata: {"text":"回答","offset":2}\n\nevent: complete\ndata: {"status":"COMPLETED","result":{"content":"回答"}}\n\n',
     {headers:{'content-type':'text/event-stream'}}));
   const chunks=[],phases=[];
   const result=await module.watchChatRun('fixture',new AbortController().signal,text=>chunks.push(text),value=>phases.push(value));
@@ -50,12 +50,14 @@ test('public progress keeps only valid timing and phase counters, never arbitrar
     firstTokenMs: 8000, phaseElapsedMs: 3000, queueMs: 100, modelCalls: 3, activeModelCalls: 1,
     reasoning_content: 'SECRET_REASONING', system: 'SECRET_PROMPT', toolArguments: { content: 'SECRET_CODE' },
     stages: [{ stage: 'generating', durationMs: 4000, text: 'SECRET_TEXT' }, { stage: 'private', durationMs: 100 }],
-    phases: [{ phase: 'tools', durationMs: 3000, modelCalls: 2, output: 'SECRET_OUTPUT' },
+    phases: [{ phase: 'thinking', durationMs: 700, modelCalls: 1, description: 'SECRET_SUMMARY' },
+      { phase: 'tools', durationMs: 3000, modelCalls: 2, output: 'SECRET_OUTPUT' },
       { phase: 'tools', durationMs: 999, modelCalls: 4 }, { phase: 'context', durationMs: -1, modelCalls: 0 }],
   });
   assert.deepEqual(value, { stage: 'generating', phase: 'tools', elapsedMs: 4000, firstTokenMs: null,
     phaseElapsedMs: 3000, queueMs: 100, modelCalls: 3, activeModelCalls: 1,
-    stages: [{ stage: 'generating', durationMs: 4000 }], phases: [{ phase: 'tools', durationMs: 3000, modelCalls: 2 }] });
+    stages: [{ stage: 'generating', durationMs: 4000 }], phases: [
+      { phase: 'thinking', durationMs: 700, modelCalls: 1 }, { phase: 'tools', durationMs: 3000, modelCalls: 2 }] });
   assert(!JSON.stringify(value).includes('SECRET_'));
   assert.equal(module.parseGenerationProgress({ stage: 'private', elapsedMs: 0 }), null);
   assert.equal(module.parseGenerationProgress({ stage: 'generating', elapsedMs: Infinity }), null);

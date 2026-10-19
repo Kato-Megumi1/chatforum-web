@@ -4,13 +4,13 @@ import { useUserStore } from '@/stores/user';
 import { readSse } from './sse';
 
 export interface RunResult { status: string; error?: string; result?: { content: string; ragMetadata?: any } }
-export type GenerationPhase = 'queued' | 'context' | 'understanding' | 'retrieving' | 'evidence' | 'generating' | 'tools' | 'verifying' | 'delivering' | 'completed';
+export type GenerationPhase = 'queued' | 'context' | 'understanding' | 'retrieving' | 'evidence' | 'thinking' | 'generating' | 'tools' | 'verifying' | 'delivering' | 'completed';
 export interface GenerationProgress { stage: 'preparing' | 'generating' | 'tools' | 'verifying' | 'completed';
   elapsedMs: number; firstTokenMs: number | null; stages: Array<{ stage: string; durationMs: number }>;
   phase?: GenerationPhase; phaseElapsedMs?: number; queueMs?: number; modelCalls?: number; activeModelCalls?: number;
   phases?: Array<{ phase: GenerationPhase; durationMs: number; modelCalls: number }> }
 const stages = ['preparing', 'generating', 'tools', 'verifying', 'completed'] as const;
-const phases: GenerationPhase[] = ['queued', 'context', 'understanding', 'retrieving', 'evidence', 'generating', 'tools', 'verifying', 'delivering', 'completed'];
+const phases: GenerationPhase[] = ['queued', 'context', 'understanding', 'retrieving', 'evidence', 'thinking', 'generating', 'tools', 'verifying', 'delivering', 'completed'];
 const time = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER;
 const count = (value: unknown): value is number => time(value) && Number.isSafeInteger(value);
 const object = (value: unknown): value is Record<string, any> => !!value && typeof value === 'object' && !Array.isArray(value);
