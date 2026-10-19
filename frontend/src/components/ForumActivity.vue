@@ -16,8 +16,8 @@
       <el-alert v-if="loadError" title="暂时没能加载社区内容，请重试" type="error" :closable="false" show-icon><el-button link @click="load">重新加载</el-button></el-alert>
       <el-empty v-if="!items.length && !loading && !loadError" :description="emptyText" :image-size="76" />
       <template v-for="item in items" :key="item.id">
-        <router-link v-if="active === 'following'" class="activity-item follow-item" :to="'/user/' + item.id"><el-avatar :src="item.avatar" :size="38">{{ item.username.slice(0, 1) }}</el-avatar><div><strong>{{ item.username }}</strong><p>{{ item.bio || '去看看 TA 的主页' }}</p></div></router-link>
-        <router-link v-else-if="active === 'replies' && item.post?.status === 'APPROVED'" class="activity-item" :to="'/forum/post/' + item.post.id + '?comment=' + item.id"><strong>{{ item.post.title }}</strong><p class="reply-content">{{ item.content }}</p><small>{{ date(item.createdAt) }} · 查看这条回复</small></router-link>
+        <router-link v-if="active === 'following'" class="activity-item follow-item" :to="'/user/' + item.id"><el-avatar :src="item.avatar" :size="38">{{ item.username.slice(0, 1) }}</el-avatar><div><strong>{{ item.username }}</strong><p v-if="item.bio">{{ item.bio }}</p></div></router-link>
+        <router-link v-else-if="active === 'replies' && item.post?.status === 'APPROVED'" class="activity-item" :to="'/forum/post/' + item.post.id + '?comment=' + item.id"><strong>{{ item.post.title }}</strong><p class="reply-content">{{ item.content }}</p><small>{{ date(item.createdAt) }}</small></router-link>
         <div v-else-if="active === 'replies'" class="activity-item"><strong>原帖已不可访问</strong><p>{{ item.content }}</p></div>
         <router-link v-else class="activity-item" :to="'/forum/post/' + item.id"><strong>{{ item.title }}</strong><p>{{ item.summary }}</p><small>{{ item.category?.name }} · {{ date(item.createdAt) }} · {{ item.commentCount }} 条评论<span v-if="item.status && item.status !== 'APPROVED'"> · {{ item.status === 'PENDING' ? '审核中' : '暂未公开' }}</span></small></router-link>
       </template>
@@ -42,7 +42,7 @@ const activityTabs = [
 ];
 let generation = 0;
 const date = (time: string) => dayjs(time).format('YYYY-MM-DD');
-const emptyText = computed(() => ({ posts: '还没有发布帖子', replies: '还没有参与讨论', favorites: '遇到喜欢的帖子，可以收藏在这里', following: '关注感兴趣的社区成员' }[active.value] || '暂无内容'));
+const emptyText = computed(() => ({ posts: '还没有发布帖子', replies: '还没有参与讨论', favorites: '还没有收藏帖子', following: '还没有关注其他人' }[active.value] || '暂无内容'));
 async function load() {
   const stamp = ++generation, account = user.user?.id;
   if (!account) return;

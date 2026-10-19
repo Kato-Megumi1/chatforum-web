@@ -1,16 +1,16 @@
 <template>
   <div class="novel-page" v-loading="loading">
     <div class="heading">
-      <div><h2>小说与角色记忆</h2><p>一本小说，多次修订。原文、索引和回答依据始终可以追溯。</p></div>
+      <h2>小说与角色记忆</h2>
       <el-button type="primary" @click="creating = true">创建小说库</el-button>
     </div>
-    <el-empty v-if="!books.length && !loading" description="暂无知识库，点击右上方创建自己的私有库" />
+    <el-empty v-if="!books.length && !loading" description="暂无知识库" />
     <el-card v-for="kb in books" :key="kb.id" class="book">
       <template #header>
         <div class="heading"><strong>{{ kb.name }}</strong><el-tag>{{ kb.permission === 'READ' ? '读者' : '维护者' }}</el-tag></div>
       </template>
-      <p>{{ kb.description }}</p>
-      <p v-if="!kb.chatReady" class="setup-hint">{{ kb.chatUnavailableReason }}。{{ kb.permission === 'READ' ? '请联系此库维护者完成发布。' : '流程：导入原文 → 构建新索引 → 验证就绪 → 发布 → 用于对话。' }}</p>
+      <p v-if="kb.description">{{ kb.description }}</p>
+      <p v-if="!kb.chatReady" class="setup-hint">{{ kb.chatUnavailableReason }}<span v-if="kb.permission === 'READ'">，请联系维护者。</span></p>
       <div class="badges">
         <el-tag :type="kb.activeIndexVersion ? 'success' : 'warning'">
           {{ kb.activeIndexVersion ? '线上索引 v' + kb.activeIndexVersion : '尚未发布索引' }}
@@ -20,7 +20,6 @@
       </div>
       <el-tabs>
         <el-tab-pane label="原文版本">
-          <p>上传保存修订版后，先构建新索引；验证完成才能发布。旧版会保留，供历史引用与回滚使用。</p>
           <el-upload v-if="kb.permission !== 'READ'" :action="uploadUrl(kb)" :headers="uploadHeaders"
             :show-file-list="false" :before-upload="beforeUpload" :on-success="uploaded" :on-error="uploadError" accept=".epub,.txt,.pdf">
             <el-button type="primary" plain>{{ currentDoc(kb) ? '上传小说修订版' : '导入小说原文' }}</el-button>
@@ -81,11 +80,9 @@
             <el-button v-if="kb.permission === 'ADMIN' && kb.activeIndexVersion" :loading="busy" @click="buildGraph(kb)">建立 / 更新实体索引</el-button>
             <el-button @click="loadGraph(kb.id)">查看图谱</el-button>
           </div>
-          <p>内置实体别名词表面向《路人女主》；其他原文可用混合检索，但不保证其人物能被此图谱识别。实体提及先在本地建立；语义关系按问答场景渐进抽取，共现不代表关系。</p>
           <template v-if="graphs[kb.id]">
-            <p>{{ graphs[kb.id].note }}</p>
             <div class="badges"><el-tag v-for="entity in graphs[kb.id].entities" :key="entity.key">{{ entity.name }} · {{ entity.mentions }} 段提及</el-tag></div>
-            <el-empty v-if="!graphs[kb.id].facts?.length" description="尚无已抽取场景关系；完成原文问答后可在这里查看" />
+            <el-empty v-if="!graphs[kb.id].facts?.length" description="暂无场景关系" />
             <div v-for="(fact, i) in graphs[kb.id].facts" :key="i" class="passage">
               <strong>{{ fact.subject }} → {{ fact.target || fact.predicate }}</strong>
               <p>{{ fact.text }}</p><p>{{ fact.chapter }}</p>
@@ -93,20 +90,8 @@
             </div>
           </template>
         </el-tab-pane>
-        <el-tab-pane label="原文复核">
-          <el-button text @click="loadReviews(kb.id)">刷新复核列表</el-button>
-          <el-empty v-if="!reviews[kb.id]?.length" description="暂无待复核问题" />
-          <div v-for="r in reviews[kb.id] || []" :key="r.id" class="passage">
-            <strong>#{{ r.id }} {{ r.question }}</strong>
-            <p>{{ r.reason }} · {{ r.status }}</p>
-            <p v-if="r.expertAnswer">{{ r.expertAnswer }}</p>
-            <el-button v-if="kb.permission !== 'READ' && ['PENDING', 'IN_REVIEW'].includes(r.status)" size="small"
-              @click="resolve(kb.id, r.id)">填写复核结论</el-button>
-          </div>
-        </el-tab-pane>
         <el-tab-pane v-if="kb.permission === 'ADMIN'" label="访问权限">
-          <p>“登录用户可读”适合角色共用的小说。设为受限后，仅所有者、管理员和授权读者可访问。</p>
-          <el-switch :model-value="kb.visibility === 'PUBLIC'" active-text="登录用户可读"
+          <el-switch :model-value="kb.visibility === 'PUBLIC'" active-text="登录用户可读" inactive-text="受限访问" aria-label="知识库访问范围"
             @change="(v: any) => visibility(kb.id, v)" />
           <div class="actions">
             <el-input-number v-model="aclUser" :min="1" />
@@ -124,7 +109,6 @@
         <el-form-item label="名称"><el-input v-model="form.name" placeholder="加藤惠小说库" /></el-form-item>
         <el-form-item label="描述"><el-input v-model="form.description" type="textarea" /></el-form-item>
         <el-form-item label="访问范围"><el-switch v-model="form.shared" active-text="登录用户可读" inactive-text="仅自己和管理员" /></el-form-item>
-        <p>默认私有。导入后需要构建并发布索引才能用于对话。嵌入模型由服务端管理，不需要填写密钥。</p>
       </el-form>
       <template #footer><el-button type="primary" @click="create" :loading="busy">创建</el-button></template>
     </el-dialog>
@@ -139,7 +123,7 @@ import { useUserStore } from '@/stores/user';
 import RagEvidence from '@/components/RagEvidence.vue';
 const user = useUserStore();
 const books = ref<any[]>([]), loading = ref(false), busy = ref(false), creating = ref(false);
-const indexes = ref<Record<number, any[]>>({}), reviews = ref<Record<number, any[]>>({});
+const indexes = ref<Record<number, any[]>>({});
 const results = ref<Record<number, any>>({}), queries = ref<Record<number, string>>({});
 const graphs = ref<Record<number, any>>({});
 const aclUser = ref(1), aclPermission = ref('READ'), form = ref({ name: '', description: '', shared: false });
@@ -156,14 +140,10 @@ async function load() {
   loading.value = true;
   try {
     books.value = await request.get('/rag/knowledge-bases');
-    await Promise.all(books.value.map(async kb => {
-      if (kb.permission !== 'READ') await loadIndexes(kb.id);
-      await loadReviews(kb.id);
-    }));
+    await Promise.all(books.value.filter(kb => kb.permission !== 'READ').map(kb => loadIndexes(kb.id)));
   } catch { /* already displayed */ } finally { loading.value = false; }
 }
 async function loadIndexes(id: number) { indexes.value[id] = await request.get(base(id) + '/indexes'); }
-async function loadReviews(id: number) { reviews.value[id] = await request.get(base(id) + '/reviews'); }
 async function loadGraph(id: number) { graphs.value[id] = await request.get(base(id) + '/graph'); }
 async function buildGraph(kb: any) { await run(async () => {
   await request.post(base(kb.id) + '/indexes/' + kb.activeIndexVersion + '/graph');
@@ -203,13 +183,6 @@ async function search(id: number) { await run(async () => {
   if (!queries.value[id]?.trim()) return;
   results.value[id] = await request.post(base(id) + '/search', { query: queries.value[id], topK: 6 });
 }); }
-async function resolve(id: number, taskId: number) {
-  try {
-    const { value } = await ElMessageBox.prompt('填写章节、依据与纠正结论。结论不会自动写入小说原文。', '原文复核',
-      { inputType: 'textarea', inputValidator: value => !!value?.trim() || '请填写结论' });
-    await request.put(base(id) + '/reviews/' + taskId, { status: 'RESOLVED', answer: value }); await loadReviews(id);
-  } catch { /* cancelled or already displayed */ }
-}
 function beforeUpload(file: File) {
   if (file.size > 50 * 1024 * 1024) { ElMessage.warning('最大 50MB'); return false; }
   return true;

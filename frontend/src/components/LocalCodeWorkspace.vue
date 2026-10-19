@@ -1,15 +1,13 @@
 <template>
   <el-drawer :model-value="modelValue" @update:model-value="emit('update:modelValue', $event)" title="编程工作区" size="min(860px, 100vw)" class="local-code-workspace">
-    <div class="folder-hero"><div class="folder-mark"><el-icon><FolderOpened /></el-icon></div><h2>{{ connection ? connection.name : '选择你的项目文件夹' }}</h2><p>{{ connection ? '本机直连 · 当前普通 AI 会话' : '打开本机目录，让 Agent 直接读取、修改和新建文件。' }}</p></div>
-    <div v-if="!supported" class="local-notice">当前浏览器不支持目录读写授权。请在电脑 Chrome / Edge 的 HTTPS 页面使用；手机可继续使用下方的云端代码副本，但不会修改本机目录。</div>
-    <div class="local-notice">授权后，Agent 可直接保存所选目录内的代码文本；相关文件片段会经过服务端发送给你选择的模型。请选项目子目录，不要选含私密资料的整个磁盘。本功能不执行终端命令、不删除文件。</div>
+    <div class="folder-hero"><div class="folder-mark"><el-icon><FolderOpened /></el-icon></div><h2>{{ connection ? connection.name : '选择项目文件夹' }}</h2></div>
+    <div v-if="!supported" class="local-notice">当前浏览器不支持本机目录，请使用文件副本。</div>
     <el-checkbox v-model="consent" :disabled="busy">允许 Agent 直接读写我选择的文件夹，并发送相关代码片段给当前模型</el-checkbox>
     <div class="local-actions"><el-button type="primary" :disabled="!supported || !consent || busy || selecting" @click="choose">{{ connection ? '更换文件夹' : '选择本机文件夹' }}</el-button><el-button v-if="connection" @click="disconnect">断开连接</el-button><el-button v-if="connection" @click="refresh">刷新文件</el-button></div>
     <p v-if="error || localWorkspaceError" role="alert" class="local-error">{{ error || localWorkspaceError }}</p>
-    <p class="local-hint">目录授权仅保留在本标签页内。刷新、退出登录或连接中断后，需要重新选择；保持网页打开才能处理文件操作。</p>
-    <div v-if="connection" class="local-files"><nav aria-label="本机项目文件"><button v-for="path in paths" :key="path" @click="read(path)">{{ path }}</button><p v-if="!paths.length">暂无支持的代码文件。可在对话中让 Agent 新建。</p></nav><pre>{{ preview || '点击文件查看内容' }}</pre></div>
+    <div v-if="connection" class="local-files"><nav aria-label="本机项目文件"><button v-for="path in paths" :key="path" @click="read(path)">{{ path }}</button><p v-if="!paths.length">暂无代码文件</p></nav><pre>{{ preview || '点击文件查看内容' }}</pre></div>
     <section v-if="localActivity.length && connection" class="local-activity"><h3>本次文件操作</h3><div v-for="item in localActivity" :key="item.id"><code>{{ item.action }} {{ item.path }}</code><span>{{ item.status }}</span></div></section>
-    <details class="cloud-fallback"><summary>旧版云端代码副本 / 不支持本机目录的浏览器</summary><p>原上传文件和修改建议仍然保留。此模式只修改云端副本，需要下载后自行同步，不会写入本机。</p><el-button :disabled="busy" @click="openCloud">打开云端副本</el-button></details>
+    <details class="cloud-fallback"><summary>会话文件</summary><el-button :disabled="busy" @click="openCloud">打开文件副本</el-button></details>
     <CodeWorkspace v-model="showCloud" :append-to-body="true" :conversation-id="conversationId" :refresh-key="busy" />
   </el-drawer>
 </template>

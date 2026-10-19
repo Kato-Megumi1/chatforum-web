@@ -2,7 +2,6 @@
   <div v-if="CONNECTION_SETTINGS_ENABLED" class="connection" :class="{ 'connection-in-app': !['/login', '/register'].includes(route.path) }">
     <el-button text size="small" @click="visible = true">连接设置</el-button>
     <el-dialog v-model="visible" title="后端连接" width="min(480px, 95vw)" append-to-body>
-      <p>仅供本地开发调试。地址以 /api 结尾；保存后将清除当前浏览器的登录状态。请仅连接你信任的后端。</p>
       <el-input v-model="address" placeholder="https://your-host.example/api" />
       <p v-if="result">{{ result }}</p>
       <template #footer>

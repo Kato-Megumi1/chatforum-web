@@ -43,3 +43,20 @@ test('progress frames stay separate from answer text and survive normal completi
   const result=await module.watchChatRun('fixture',new AbortController().signal,text=>chunks.push(text),value=>phases.push(value));
   assert.equal(result.status,'COMPLETED');assert.deepEqual(chunks,['回答']);assert.deepEqual(phases,[progress]);
 });
+
+test('public progress keeps only valid timing and phase counters, never arbitrary model text', () => {
+  const module = load('chat-stream', { './api': {}, './request': {}, '@/stores/user': {}, './sse': {} });
+  const value = module.parseGenerationProgress({ stage: 'generating', phase: 'tools', elapsedMs: 4000,
+    firstTokenMs: 8000, phaseElapsedMs: 3000, queueMs: 100, modelCalls: 3, activeModelCalls: 1,
+    reasoning_content: 'SECRET_REASONING', system: 'SECRET_PROMPT', toolArguments: { content: 'SECRET_CODE' },
+    stages: [{ stage: 'generating', durationMs: 4000, text: 'SECRET_TEXT' }, { stage: 'private', durationMs: 100 }],
+    phases: [{ phase: 'tools', durationMs: 3000, modelCalls: 2, output: 'SECRET_OUTPUT' },
+      { phase: 'tools', durationMs: 999, modelCalls: 4 }, { phase: 'context', durationMs: -1, modelCalls: 0 }],
+  });
+  assert.deepEqual(value, { stage: 'generating', phase: 'tools', elapsedMs: 4000, firstTokenMs: null,
+    phaseElapsedMs: 3000, queueMs: 100, modelCalls: 3, activeModelCalls: 1,
+    stages: [{ stage: 'generating', durationMs: 4000 }], phases: [{ phase: 'tools', durationMs: 3000, modelCalls: 2 }] });
+  assert(!JSON.stringify(value).includes('SECRET_'));
+  assert.equal(module.parseGenerationProgress({ stage: 'private', elapsedMs: 0 }), null);
+  assert.equal(module.parseGenerationProgress({ stage: 'generating', elapsedMs: Infinity }), null);
+});

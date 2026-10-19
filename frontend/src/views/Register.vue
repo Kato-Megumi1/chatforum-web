@@ -6,7 +6,6 @@
           <ChatDotRound />
         </el-icon>
         <h1>创建账号</h1>
-        <p>加入 ChatForum 社区</p>
       </div>
       <el-form
         ref="formRef"
@@ -184,11 +183,6 @@ const handleRegister = async () => {
     color: #303133;
   }
 
-  p {
-    margin: 0;
-    font-size: 14px;
-    color: #909399;
-  }
 }
 
 .register-footer {

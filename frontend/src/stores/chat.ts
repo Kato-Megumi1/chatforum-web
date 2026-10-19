@@ -6,7 +6,7 @@ import { disconnectLocalWorkspace } from '@/utils/local-workspace';
 import { CHAT_NAVIGATION_KEY, emptyChatNavigation, readChatNavigation, type ChatSpace } from '@/utils/chat-navigation';
 import { chatFileRef, type ChatFile } from '@/utils/chat-files';
 import { selectedChatModel } from '@/utils/chat-model-selection';
-import { ensureConversationSettings, type ConversationSettings } from '@/utils/roleplay-defaults';
+import { conversationResponseOptions, ensureConversationSettings, type ConversationSettings } from '@/utils/roleplay-defaults';
 
 interface Conversation { id: number; title: string; isPinned: boolean; userId: number; createdAt: string; updatedAt: string;
   conversationType: 'ASSISTANT' | 'ROLEPLAY' | 'LEGACY'; personaKey?: string; personaLabel?: string;
@@ -159,7 +159,8 @@ export const useChatStore = defineStore('chat', () => {
       messages.value.push(pendingQuestion.value, pendingReply.value);
       // Admit once; subscribe/reconnect to the durable run without repeating model calls.
       const run = await request.post<Run>('/chat/runs', { requestId: crypto.randomUUID(),
-        conversationId: cid, question, mode, enabledSkills, codingWorkspaceId, persona: persona || undefined,
+        conversationId: cid, question, mode, enabledSkills: enabledSkills?.filter(skill => skill !== 'web_search'),
+        ...conversationResponseOptions(getConversationSettings(cid), currentConversation.value?.conversationType), codingWorkspaceId, persona: persona || undefined,
         attachments:attachments?.files.length?attachments.files.map(chatFileRef):undefined,
         customSystemPrompt: customSystemPrompt || undefined, knowledgeBaseId: knowledgeBaseId || undefined,
         modelId: selectedModelId(cid) });

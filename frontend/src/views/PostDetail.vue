@@ -5,15 +5,14 @@
         <template #reference><button class="reading-settings-trigger" type="button" aria-label="阅读设置"><span aria-hidden="true">Aa</span>阅读设置</button></template>
         <div class="reading-settings-panel"><div class="reading-settings-title">帖子文字大小</div>
           <div class="reading-font-options" role="group" aria-label="帖子文字大小"><button v-for="option in READING_FONT_OPTIONS" :key="option.value" type="button" :aria-pressed="readingFont === option.value" @click="setReadingFont(option.value)">{{ option.label }}</button></div>
-          <p>只调整正文和评论，不改变导航及按钮。</p>
-          <div class="reading-settings-footer"><span role="status">{{ readingPreferenceSaved ? '仅保存在当前浏览器，按账号区分' : '本次已生效；浏览器暂未能保存设置' }}</span><button type="button" @click="setReadingFont('standard')">恢复标准</button></div>
+          <div class="reading-settings-footer"><span v-if="!readingPreferenceSaved" role="status">设置已生效，但未能保存</span><button type="button" @click="setReadingFont('standard')">恢复标准</button></div>
         </div>
       </el-popover>
     </template></el-page-header>
     <el-skeleton v-if="loading" :rows="8" animated class="post-card" />
     <el-empty v-else-if="!post" description="帖子暂时无法访问"><el-button @click="load">重试</el-button></el-empty>
     <article v-else class="post-card">
-      <div class="eyebrow">COMMUNITY · {{ post.category?.name || '校园交流' }}</div>
+      <div class="eyebrow">{{ post.category?.name || '校园交流' }}</div>
       <h1>{{ post.title }}</h1>
       <div class="post-meta">
         <router-link class="author-link author-avatar-link" :to="'/user/' + post.user.id" :aria-label="'查看 ' + post.user.username + ' 的主页'"><el-avatar :size="36" :src="post.user.avatar">{{ post.user.username.slice(0, 1) }}</el-avatar></router-link>
@@ -26,19 +25,18 @@
       <div class="tags"><el-tag v-for="pt in post.tags" :key="pt.tag.id" effect="plain" round>{{ pt.tag.name }}</el-tag></div>
       <div class="post-actions">
         <el-button round :type="post.isLiked ? 'primary' : 'default'" :loading="busy.has('like')" @click="togglePost('like')">{{ post.isLiked ? '已点赞' : '点赞' }} {{ post.likeCount }}</el-button>
-        <el-button round :type="post.isFavorited ? 'primary' : 'default'" :aria-pressed="!!post.isFavorited" :loading="busy.has('favorite')" @click="togglePost('favorite')"><el-icon><Collection /></el-icon>{{ post.isFavorited ? '已收藏 · 取消' : '收藏帖子' }}</el-button>
+        <el-button round :type="post.isFavorited ? 'primary' : 'default'" :aria-pressed="!!post.isFavorited" :aria-label="post.isFavorited ? '取消收藏帖子' : '收藏帖子'" :loading="busy.has('favorite')" @click="togglePost('favorite')"><el-icon><Collection /></el-icon>{{ post.isFavorited ? '已收藏' : '收藏帖子' }}</el-button>
         <router-link v-if="post.isFavorited" class="my-favorites" to="/user/profile?activity=favorites">我的收藏</router-link>
         <el-button v-if="userStore.user" round :loading="tracking" :disabled="trackedPost === post.id" @click="trackPost">{{ trackedPost === post.id ? '已追踪更新' : '追踪帖子更新' }}</el-button>
         <el-button v-if="post.user.id === userStore.user?.id" round @click="$router.push('/forum/post/' + post.id + '/edit')">编辑帖子</el-button>
       </div>
       <section class="discussion" :aria-labelledby="'post-discussion-' + post.id">
-        <div class="discussion-heading"><h2 ref="discussionHeading" :id="'post-discussion-' + post.id" tabindex="-1">一起聊聊 <span>{{ post.commentCount }}</span></h2>
+        <div class="discussion-heading"><h2 ref="discussionHeading" :id="'post-discussion-' + post.id" tabindex="-1">评论 <span>{{ post.commentCount }}</span></h2>
           <div class="discussion-controls"><el-switch v-model="onlyAuthor" active-text="只看楼主" aria-label="只看楼主" :disabled="submitting || replySubmitting" @change="changeAuthorFilter" />
           <el-select v-model="sortOrder" aria-label="评论排序" style="width:120px" @change="changeSort">
             <el-option label="最新优先" value="desc" /><el-option label="最早优先" value="asc" />
           </el-select></div>
         </div>
-        <p class="hint">分享你的看法，也欢迎补充有用的信息。</p>
         <p v-if="onlyAuthor" class="hint author-filter-hint" role="status">只看楼主发言 · {{ authorCommentCount }} 条</p>
         <p v-if="focusUnavailable" class="hint" role="status">{{ onlyAuthor ? '这条评论不在“只看楼主”范围内或已不可访问，以下仅展示楼主发言。' : '这条评论已不可访问，以下是帖子的当前讨论。' }}</p>
         <div v-if="userStore.user" ref="commentComposer" class="composer" :class="{ 'composer-expanded': commentComposerOpen }">
@@ -47,13 +45,13 @@
           </button>
           <div id="post-comment-editor" class="composer-editor">
             <el-input v-model="commentText" type="textarea" :rows="3" maxlength="4000" show-word-limit placeholder="写下你的评论，分享观点或提个问题…" aria-label="评论内容" />
-            <div class="composer-actions"><span>友善交流，尊重他人</span><el-button type="primary" round :loading="submitting" :disabled="!commentText.trim()" @click="submitComment">发表评论</el-button></div>
+            <div class="composer-actions comment-submit-actions"><el-button type="primary" round :loading="submitting" :disabled="!commentText.trim()" @click="submitComment">发表评论</el-button></div>
           </div>
         </div>
         <el-button v-else plain round @click="$router.push('/login')">登录后参与讨论</el-button>
         <div v-loading="commentsLoading" class="comments">
           <el-alert v-if="commentsError" class="comments-error" title="评论暂时加载失败，请重试" type="error" :closable="false"><el-button link @click="loadComments">重试评论</el-button></el-alert>
-          <el-empty v-if="!comments.length && !commentsLoading && !commentsError" :image-size="72" :description="onlyAuthor ? '楼主暂时还没有发言' : '还没有评论，来开启这段讨论吧'" />
+          <el-empty v-if="!comments.length && !commentsLoading && !commentsError" :image-size="72" :description="onlyAuthor ? '楼主暂时还没有发言' : '还没有评论'" />
           <div v-for="comment in comments" :key="comment.id" :id="'comment-' + comment.id" class="comment" :class="{ 'new-comment': highlightedId === comment.id }">
             <el-avatar v-if="!comment.contextOnly" :size="36" :src="comment.user.avatar">{{ comment.user.username.slice(0, 1) }}</el-avatar>
             <div class="comment-body">
@@ -405,7 +403,7 @@ h1 { font-size: 27px; line-height: 1.5; margin: 12px 0 18px; overflow-wrap: anyw
 h2 { font-size: 19px; margin: 0; } h2 span { font-size: 12px; background: #f0f4f9; padding: 3px 8px; border-radius: 12px; margin-left: 6px; }
 .hint { margin: 12px 0 20px; }
 .composer { padding: 16px; background: #f7f9fc; border-radius: 14px; }
-.composer-actions { margin-top: 12px; } .composer-actions span { color: var(--text-secondary); font-size: 12px; }
+.composer-actions { margin-top: 12px; } .comment-submit-actions { justify-content: flex-end; }
 .comments { min-height: 80px; margin-top: 24px; }
 .comment { display: flex; gap: 12px; border-bottom: 1px solid var(--border-light); padding: 22px 0; }
 .comment > .el-avatar { flex-shrink: 0; } .comment-body { flex: 1; min-width: 0; }
@@ -427,11 +425,11 @@ h2 { font-size: 19px; margin: 0; } h2 span { font-size: 12px; background: #f0f4f
 .reading-font-options { display: flex; gap: 6px; }
 .reading-font-options button { flex: 1; min-height: 40px; border: 1px solid var(--border-light); border-radius: 8px; background: #fff; color: var(--text-regular); font: inherit; cursor: pointer; }
 .reading-font-options button[aria-pressed='true'] { color: var(--primary-color); background: var(--primary-bg); border-color: var(--primary-color); }
-.reading-settings-panel > p, .reading-settings-footer { font-size: 11px; line-height: 1.7; color: var(--text-secondary); }
+.reading-settings-footer { font-size: 11px; line-height: 1.7; color: var(--text-secondary); }
 .reading-settings-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .reading-settings-footer button { flex-shrink: 0; min-height: 36px; border: 0; background: transparent; color: var(--primary-color); font: inherit; cursor: pointer; }
 .post-page:not([data-reading-font='standard']) .legacy-content :deep(pre), .post-page:not([data-reading-font='standard']) .legacy-content :deep(code) { font-size: var(--reading-body-size); }
-@media (max-width: 600px) { .post-wrapper { padding: 16px 12px 32px; } .post-card { padding: 22px 16px; border-radius: 14px; } h1 { font-size: 22px; } .composer { padding: 12px; } .composer-actions span { max-width: 100px; } }
+@media (max-width: 600px) { .post-wrapper { padding: 16px 12px 32px; } .post-card { padding: 22px 16px; border-radius: 14px; } h1 { font-size: 22px; } .composer { padding: 12px; } }
 @media (max-width: 900px) {
   .post-page { background: #faf9f7; display: flex; flex-direction: column; overflow: hidden; }
   .post-wrapper { padding: 16px 16px 28px; width: 100%; box-sizing: border-box; flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; }

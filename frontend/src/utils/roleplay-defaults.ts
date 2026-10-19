@@ -7,6 +7,16 @@ export interface ConversationSettings {
   modelId?: string;
   codingEnabled?: boolean;
   katoDefaultKnowledgePending?: boolean;
+  deepThinking?: boolean;
+  webSearch?: boolean;
+}
+
+/** Missing options in older saved conversations use the same explicit defaults. */
+export function conversationResponseOptions(settings?: Pick<ConversationSettings, 'deepThinking' | 'webSearch'>, conversationType = 'ASSISTANT') {
+  return {
+    deepThinking: conversationType === 'ASSISTANT' && (typeof settings?.deepThinking === 'boolean' ? settings.deepThinking : true),
+    webSearch: typeof settings?.webSearch === 'boolean' ? settings.webSearch : false,
+  };
 }
 
 interface ConversationIdentity {
@@ -28,6 +38,8 @@ export function ensureConversationSettings(
     customPersonaName: '',
     customPersonaPrompt: '',
     knowledgeBaseId: 0,
+    deepThinking: identity?.conversationType !== 'ROLEPLAY' && identity?.conversationType !== 'LEGACY',
+    webSearch: false,
     ...(kato ? { katoDefaultKnowledgePending: true } : {}),
   };
   settings[id] = created;

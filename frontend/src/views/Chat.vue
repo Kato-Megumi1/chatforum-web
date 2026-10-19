@@ -5,7 +5,7 @@
       <button class="mobile-conversation-title" @click="isAssistant ? showSettings = true : mobileOptions = !mobileOptions" :aria-expanded="mobileOptions" :disabled="!chatStore.currentConversation && !isAssistant" :aria-label="isAssistant ? '模型设置' : '对话选项'">
         <img v-if="selectedPersona === 'kato_megumi_persona'" :src="publicAsset('kato-megumi-avatar.jpg')" alt="" />
         <span><strong>{{ isLegacy ? '旧历史' : hasPersonaActive ? personaDisplayName : activeSpace === 'ROLEPLAY' ? '角色对话' : '普通 AI' }} <el-icon><ArrowDown /></el-icon></strong>
-          <small v-if="!isAssistant">{{ isLegacy ? '仅供回顾' : '角色扮演 · 独立记忆' }}<template v-if="selectedKnowledgeBaseId"> · 已选知识库</template></small></span>
+          <small v-if="!isAssistant">{{ isLegacy ? '只读' : '角色扮演' }}</small></span>
       </button>
       <button class="mobile-icon-button" @click="handleNewChat(); mobileSidebar = false" aria-label="新建对话"><el-icon><EditPen /></el-icon></button>
     </header>
@@ -62,7 +62,6 @@
           <div v-if="visibleConversations.length === 0" class="sidebar-empty">
             <el-icon :size="40" color="#C9CDD4"><ChatDotRound /></el-icon>
             <p>暂无对话</p>
-            <span>点击上方按钮开始</span>
           </div>
         </div>
       </div>
@@ -77,10 +76,10 @@
     <main class="chat-main" :class="{ 'persona-theme': hasPersonaActive, 'assistant-main': isAssistant }">
       <header v-if="isAssistant" class="assistant-page-heading"><span>{{ chatStore.currentConversation?.title === 'New Conversation' ? '新对话' : chatStore.currentConversation?.title || 'AI 助手' }}</span><button aria-label="对话设置" @click="showSettings = true"><el-icon><MoreFilled /></el-icon></button></header>
       <div v-if="isAssistant && !chatStore.isLoadingConversation && !chatStore.messages.length" class="assistant-welcome">
-        <div class="welcome-copy"><h1>有什么我能帮你的吗？</h1><p>一个问题，一个想法，都可以从这里开始。</p></div>
+        <div class="welcome-copy"><h1>有什么我能帮你的吗？</h1></div>
         <div class="assistant-start">
           <div class="assistant-suggestions"><button @click="suggest('帮我看看论坛最新的7条帖子', true)"><el-icon><ChatLineSquare /></el-icon>逛逛社区<span>↗</span></button><button @click="openCoding"><span class="code-symbol">&lt;/&gt;</span>一起写代码<span>↗</span></button></div>
-          <AssistantComposer v-model="inputText" v-model:mode="agentMode"
+          <AssistantComposer v-model="inputText" v-model:mode="agentMode" v-model:deep-thinking="deepThinking" v-model:web-search="webSearch"
             :busy="chatStore.isStreaming || uploadingFiles" :coding="codingEnabled" :files="pendingFiles" :library-files="chatFiles" :uploading="uploadingFiles" @upload="uploadFiles" @remove="removePendingFile" @files="openFileLibrary" @enter="handleKeyDown" @send="handleSendMessage" @stop="handleStopGeneration" @settings="showSettings = true" @coding="openCoding" />
         </div>
       </div>
@@ -90,22 +89,21 @@
             <ChatDotRound />
           </el-icon>
         </div>
-        <h2>{{ activeSpace === 'ROLEPLAY' ? '与角色开始一段新对话' : '普通 AI，专注解决问题' }}</h2>
-        <p>{{ activeSpace === 'ROLEPLAY' ? '角色、相处状态与原作证据独立保存' : '问答与任务记忆独立，不带入角色身份' }}</p>
+        <h2>{{ activeSpace === 'ROLEPLAY' ? '角色对话' : '普通 AI' }}</h2>
         <el-button type="primary" size="large" class="btn-start" @click="handleNewChat(); mobileSidebar = false">
           <el-icon><Plus /></el-icon>
           新建对话
         </el-button>
       </div>
       <div v-else class="chat-content">
-        <div v-if="isLegacy" class="identity-notice">旧会话已保留。身份混合或缺少标记的历史不会自动进入新记忆，请在对应模式新建会话。</div>
+        <div v-if="isLegacy" class="identity-notice">旧会话只读</div>
         <div v-if="hasPersonaActive" class="persona-bar">
           <div class="persona-bar-avatar">
             <img v-if="selectedPersona === 'kato_megumi_persona'" :src="publicAsset('kato-megumi-avatar.jpg')" alt="加藤惠" />
             <div v-else class="persona-avatar-placeholder" :class="personaAvatarClass">{{ personaDisplayName[0] }}</div>
           </div>
-          <span class="persona-bar-text">正在与 <strong>{{ personaDisplayName }}</strong> 对话中</span>
-          <el-tag size="small" type="danger" effect="plain">角色扮演模式</el-tag>
+          <span class="persona-bar-text"><strong>{{ personaDisplayName }}</strong></span>
+          <el-tag size="small" type="danger" effect="plain">角色对话</el-tag>
         </div>
         <div v-if="!isAssistant" class="chat-toolbar" :class="{ 'mobile-open': mobileOptions }">
           <div class="mobile-options-heading"><strong>对话选项</strong><button class="mobile-icon-button" @click="mobileOptions = false" aria-label="收起对话选项"><el-icon><Close /></el-icon></button></div>
@@ -149,7 +147,7 @@
         </div>
         <div v-if="selectedPersona === 'custom'" class="custom-persona-inline">
           <el-input v-model="customPersonaName" placeholder="角色名称" size="small" class="custom-name" :disabled="chatStore.messages.length > 0" />
-          <el-input v-model="customPersonaPrompt" type="textarea" :rows="2" placeholder="自定义系统提示词..." size="small" class="custom-prompt" :disabled="chatStore.messages.length > 0" />
+          <el-input v-model="customPersonaPrompt" type="textarea" :rows="2" placeholder="角色设定" size="small" class="custom-prompt" :disabled="chatStore.messages.length > 0" />
         </div>
       <div class="dialogue-surface">
         <div v-if="hasPersonaActive" class="roleplay-wallpaper" aria-hidden="true">
@@ -190,11 +188,12 @@
                 </div>
                 <div class="message-text" v-html="renderMarkdown(getCleanContent(msg.content))"></div>
                 <RagEvidence v-if="msg.role === 'assistant'" :metadata="msg.ragMetadata" />
+                <WebSearchSources v-if="msg.role === 'assistant' && !msg.pending" :metadata="msg.ragMetadata?.webSearch" />
                 <FileArtifacts v-if="isAssistant" :conversation-id="chatStore.currentConversation!.id" :artifacts="msg.ragMetadata?.fileArtifacts" />
                 </template>
               </div>
-              <GenerationStatus v-if="isAssistant && msg.role === 'assistant'" :pending="msg.pending" :busy="chatStore.isStreaming"
-                :progress="msg.ragMetadata?.performance" :generation="msg.ragMetadata?.generation" @continue="continueAnswer(msg)" />
+              <GenerationStatus v-if="msg.role === 'assistant'" :pending="msg.pending" :busy="chatStore.isStreaming"
+                :progress="msg.ragMetadata?.performance" :generation="isAssistant ? msg.ragMetadata?.generation : undefined" @continue="continueAnswer(msg)" />
               <div
                 v-if="msg.content && !msg.pending"
                 class="message-actions"
@@ -219,9 +218,8 @@
         </div>
         <div class="chat-input-area">
           <template v-if="isAssistant">
-            <AssistantComposer v-model="inputText" v-model:mode="agentMode"
+            <AssistantComposer v-model="inputText" v-model:mode="agentMode" v-model:deep-thinking="deepThinking" v-model:web-search="webSearch"
               :busy="chatStore.isStreaming || uploadingFiles" :coding="codingEnabled" :files="pendingFiles" :library-files="chatFiles" :uploading="uploadingFiles" @upload="uploadFiles" @remove="removePendingFile" @files="openFileLibrary" @enter="handleKeyDown" @send="handleSendMessage" @stop="handleStopGeneration" @settings="showSettings = true" @coding="openCoding" />
-            <p class="assistant-footnote">内容由 AI 生成，重要信息请核实。</p>
           </template>
           <div v-else class="chat-input-wrapper">
             <el-input
@@ -233,6 +231,7 @@
               :disabled="chatStore.isStreaming || isLegacy"
               class="chat-textarea"
             />
+            <div class="roleplay-composer-bottom">
             <el-button
               v-if="chatStore.isStreaming"
               type="danger"
@@ -254,6 +253,7 @@
             >
               <el-icon><Promotion /></el-icon>
             </el-button>
+            </div>
           </div>
         </div>
       </div>
@@ -262,21 +262,28 @@
     <CodeWorkspace v-if="isAssistant && chatStore.currentConversation" v-model="showCode" :conversation-id="chatStore.currentConversation.id" :refresh-key="chatStore.isStreaming || uploadingFiles" @changed="refreshFiles" @attach="attachFiles" />
     <el-drawer v-model="showSettings" title="模型设置" size="min(420px, 100vw)" class="settings-drawer">
       <el-form label-position="top">
-        <el-form-item label="对话模型（仅选择，不配置密钥）">
+        <el-form-item label="对话模型">
           <el-select v-model="selectedModelId" aria-label="设置中的对话模型" style="width: 100%" :disabled="chatStore.isStreaming">
             <el-option v-for="model in chatStore.llmConfig.models" :key="model.id" :label="model.label + (model.available ? '' : '（不可用）')"
               :value="model.id" :disabled="!model.available" />
           </el-select>
         </el-form-item>
-        <p class="model-help">选择按对话保存在当前浏览器。普通聊天、Agent 和知识库回答均使用所选模型；密钥和接口地址仅由服务端维护。</p>
-        <p v-for="model in chatStore.llmConfig.models.filter(m => !m.available)" :key="model.id" class="model-help">{{ model.label }}：{{ model.unavailableReason }}</p>
+        <div v-if="!isLegacy" class="response-settings">
+          <div v-if="isAssistant" class="response-setting-row">
+            <label id="thinking-setting-label">深度思考</label>
+            <el-switch v-model="deepThinking" aria-label="深度思考" :disabled="chatStore.isStreaming || uploadingFiles" />
+          </div>
+          <div class="response-setting-row">
+            <label id="web-setting-label">联网搜索</label>
+            <el-switch v-model="webSearch" aria-label="联网搜索" :disabled="chatStore.isStreaming || uploadingFiles" />
+          </div>
+        </div>
         <el-form-item v-if="chatStore.currentConversation && !isLegacy" :label="hasPersonaActive ? '同角色跨会话记忆' : '普通 AI 跨会话记忆'">
           <el-switch :model-value="!!chatStore.currentConversation.sharedMemory" :disabled="chatStore.isStreaming" @change="toggleSharedMemory" />
         </el-form-item>
-        <p class="model-help">默认仅记住当前会话。开启后，只读取你本人同模式、同角色下也已开启共享的历史摘录；普通 AI 与角色记忆互不混用。</p>
         <div v-if="agentMode === 'agent'" class="skills-section">
           <div class="skills-header">
-            <span class="skills-label">已启用的技能</span>
+            <span class="skills-label">工具</span>
             <el-button text type="primary" size="small" @click="toggleAllSkills">
               {{ enabledSkills.length === toolSkills.length ? '全部禁用' : '全部启用' }}
             </el-button>
@@ -287,17 +294,13 @@
                 <el-checkbox :value="skill.name" :label="skill.name" border>
                   <div class="skill-info">
                     <span class="skill-name">{{ skill.description }}</span>
-                    <el-tag size="small" type="info" effect="plain">{{ skill.category }}</el-tag>
                   </div>
                 </el-checkbox>
               </div>
             </el-checkbox-group>
           </div>
         </div>
-        <el-divider />
-        <el-alert :type="chatStore.llmConfig.configured ? 'success' : 'warning'" :closable="false"
-          :title="selectedModel?.available ? '当前选择：' + selectedModel.label : '所选模型不可用，请联系管理员'"
-          description="提问与相关原文片段会发送给所选模型的服务商；小说正文不会获得工具权限。不会自动改用其他模型。" />
+        <el-alert v-if="!selectedModel?.available" type="warning" :closable="false" title="当前模型不可用" />
       </el-form>
     </el-drawer>
     <el-dialog v-model="showRenameDialog" title="重命名对话" width="min(400px, 95vw)" class="rename-dialog">
@@ -318,6 +321,7 @@ import { forumPostPath, resolveForumLinks } from '@/utils/forum-links';
 import { initialChat, type ChatSpace } from '@/utils/chat-navigation';
 import DOMPurify from 'dompurify';
 import RagEvidence from '@/components/RagEvidence.vue';
+import WebSearchSources from '@/components/WebSearchSources.vue';
 import AssistantComposer from '@/components/AssistantComposer.vue';
 import CodeWorkspace from '@/components/CodeWorkspace.vue';
 import FileArtifacts from '@/components/FileArtifacts.vue';
@@ -325,7 +329,7 @@ import MessageAttachments from '@/components/MessageAttachments.vue';
 import GenerationStatus from '@/components/GenerationStatus.vue';
 import { uploadChatFiles, chatFileKey, type ChatFile } from '@/utils/chat-files';
 import { recoverChatDraft, sameDraftFiles, sameDraftSession } from '@/utils/chat-draft-recovery';
-import { defaultKatoKnowledgeBaseId } from '@/utils/roleplay-defaults';
+import { conversationResponseOptions, defaultKatoKnowledgeBaseId } from '@/utils/roleplay-defaults';
 import { publicAsset, CONNECTION_SETTINGS_ENABLED } from '@/utils/api';
 import { useChatStore } from '@/stores/chat';
 import { useUserStore } from '@/stores/user';
@@ -348,11 +352,10 @@ const ownsView = () => viewActive && userStore.user?.id === ownerId && chatStore
 const messagesRef = ref<HTMLElement>();
 const scrollAnchor = ref<HTMLElement>();
 const inputText = ref('');
-const messagePlaceholder = window.matchMedia('(pointer: coarse)').matches
-  ? '输入消息… 回车换行，点箭头发送'
-  : '输入消息… (Enter 发送, Shift+Enter 换行)';
+const messagePlaceholder = '输入消息…';
 const showSettings = ref(false);
 const showCode = ref(false), draftMode = ref('normal'), draftCoding = ref(false);
+const draftDeepThinking = ref(true), draftWebSearch = ref(false);
 const showRenameDialog = ref(false);
 const renameTitle = ref('');
 const renamingConversation = ref<any>(null);
@@ -405,7 +408,7 @@ const switchPersona = async (persona: string) => {
     else {
       const conversation = await chatStore.createConversation(undefined, identity);
       await chatStore.selectConversation(conversation);
-      ElMessage.info('已新建独立会话，原来的消息与记忆保留在原会话');
+      ElMessage.info('已新建对话');
     }
     activeSpace.value = persona ? 'ROLEPLAY' : 'ASSISTANT';
     if (persona === 'kato_megumi_persona' && chatStore.currentConversation) {
@@ -429,6 +432,32 @@ const agentMode = computed({
     const cid = chatStore.currentConversation?.id;
     if (cid) chatStore.saveConversationSettings(cid, { agentMode: val });
     else draftMode.value = val;
+  },
+});
+
+const deepThinking = computed({
+  get: () => {
+    if (!isAssistant.value) return false;
+    const cid = chatStore.currentConversation?.id;
+    return cid ? conversationResponseOptions(chatStore.getConversationSettings(cid)).deepThinking : draftDeepThinking.value;
+  },
+  set: (value: boolean) => {
+    if (chatStore.isStreaming || uploadingFiles.value || !isAssistant.value) return;
+    const cid = chatStore.currentConversation?.id;
+    if (cid) chatStore.saveConversationSettings(cid, { deepThinking: value });
+    else draftDeepThinking.value = value;
+  },
+});
+const webSearch = computed({
+  get: () => {
+    const cid = chatStore.currentConversation?.id;
+    return cid ? conversationResponseOptions(chatStore.getConversationSettings(cid)).webSearch : draftWebSearch.value;
+  },
+  set: (value: boolean) => {
+    if (chatStore.isStreaming || uploadingFiles.value || isLegacy.value) return;
+    const cid = chatStore.currentConversation?.id;
+    if (cid) chatStore.saveConversationSettings(cid, { webSearch: value });
+    else draftWebSearch.value = value;
   },
 });
 
@@ -492,14 +521,14 @@ const katoKnowledgeDefaultPending = computed(() => {
 });
 const selectedKnowledgeIssue = computed(() => {
   if (knowledgeLoading.value) return '';
-  if (katoKnowledgeDefaultPending.value) return '默认原作知识库暂不可用，请选择可访问且已发布的小说库。';
+  if (katoKnowledgeDefaultPending.value) return '默认原作知识库暂不可用，请重新选择。';
   if (!selectedKnowledgeBaseId.value) return '';
   const kb = knowledgeBases.value.find(k => k.id === selectedKnowledgeBaseId.value);
-  return !kb ? '所选知识库已不可访问，请重新选择；不会自动改为无知识库回答。' : !kb.chatReady ? kb.chatUnavailableReason : '';
+  return !kb ? '所选知识库不可访问，请重新选择。' : !kb.chatReady ? kb.chatUnavailableReason : '';
 });
 
 const toolSkills = computed(() => {
-  return skills.value.filter(s => s.category !== '角色扮演' && s.name !== 'code_workspace');
+  return skills.value.filter(s => s.category !== '角色扮演' && s.name !== 'code_workspace' && s.name !== 'web_search');
 });
 const codingEnabled = computed({
   get: () => chatStore.currentConversation ? !!chatStore.getConversationSettings(chatStore.currentConversation.id).codingEnabled : draftCoding.value,
@@ -514,9 +543,10 @@ async function ensureAssistantConversation() {
 }
 async function createAssistant() {
   const mode = draftMode.value, coding = draftCoding.value, draft = inputText.value;
+  const options = { deepThinking: draftDeepThinking.value, webSearch: draftWebSearch.value };
   const conversation = await chatStore.createConversation(undefined, { conversationType: 'ASSISTANT' });
   if (!ownsView() || !isAssistant.value || chatStore.currentConversation) throw new Error('已切换页面，请在当前会话重试');
-  chatStore.saveConversationSettings(conversation.id, { agentMode: mode, knowledgeBaseId: 0, codingEnabled: coding });
+  chatStore.saveConversationSettings(conversation.id, { agentMode: mode, knowledgeBaseId: 0, codingEnabled: coding, ...options });
   await chatStore.selectConversation(conversation);
   if (!ownsView() || chatStore.navigation.conversationId !== conversation.id) throw new Error('已切换会话，请重试');
   inputText.value = draft;
@@ -760,7 +790,7 @@ const handleSendMessage = async () => {
   if (sendingLock || uploadingFiles.value || chatStore.isStreaming || isLegacy.value) return;
   const text = inputText.value.trim();
   if (!text && !pendingFiles.value.length) return;
-  if (!selectedModel.value?.available) { ElMessage.warning('请选择可用的服务端模型'); return; }
+  if (!selectedModel.value?.available) { ElMessage.warning('请选择可用模型'); return; }
   if (katoKnowledgeDefaultPending.value) {
     ElMessage.warning(knowledgeError.value || (knowledgeLoading.value ? '正在加载原作知识库，请稍后发送。' : selectedKnowledgeIssue.value)); return;
   }
@@ -800,7 +830,7 @@ const handleSendMessage = async () => {
         personaLabel: customPersonaName.value, customPersonaPrompt: systemPrompt });
     if (chatStore.currentConversation?.id !== sendingConversationId) throw new Error('会话已切换，请在原会话重新发送');
     const skills = [
-      ...(agentMode.value === 'agent' ? enabledSkills.value.filter(s => s !== 'code_workspace') : []),
+      ...(agentMode.value === 'agent' ? enabledSkills.value.filter(s => s !== 'code_workspace' && s !== 'web_search') : []),
       ...(isAssistant.value && (codingEnabled.value || sendingFiles.length) ? ['code_workspace'] : []),
     ];
     const kbId = selectedKnowledgeBaseId.value > 0 ? selectedKnowledgeBaseId.value : undefined;
@@ -893,7 +923,7 @@ const loadSkills = async () => {
     const data = await request.get<any[]>('/chat/skills');
     skills.value = data;
     // Only auto-enable tool skills, not persona skills
-    enabledSkills.value = data.filter(s => s.enabled && s.category !== '角色扮演' && s.name !== 'code_workspace').map(s => s.name);
+    enabledSkills.value = data.filter(s => s.enabled && s.category !== '角色扮演' && s.name !== 'code_workspace' && s.name !== 'web_search').map(s => s.name);
   } catch {
     // Ignore
   }
@@ -972,7 +1002,6 @@ onMounted(async () => {
 .identity-notice { padding: 12px 20px; font-size: 13px; line-height: 1.6; color: #7e6040; background: #fff9ed; }
 @media (max-width: 900px) { .assistant-mode-bar { display: none; } .identity-notice { padding: 10px 16px; } }
 .knowledge-notice { padding: 8px 20px; color: #7e6040; font-size: 13px; background: #fff9ed; line-height: 1.6; }
-.model-help { color: #677387; font-size: 13px; line-height: 1.7; margin: 8px 0 16px; }
 .chat-layout {
   display: flex;
   height: 100%;
@@ -1760,8 +1789,9 @@ onMounted(async () => {
 
 .chat-input-wrapper {
   display: flex;
+  flex-direction: column;
   gap: 10px;
-  align-items: flex-end;
+  align-items: stretch;
   background: #fff;
   border-radius: var(--radius-md);
   padding: 10px 10px 10px 14px;
@@ -1774,6 +1804,18 @@ onMounted(async () => {
     box-shadow: 0 0 0 3px rgba(22, 93, 255, 0.1);
   }
 }
+
+.response-settings { margin:16px 0 20px;padding:0 12px;border:1px solid #e1e7ef;border-radius:12px;background:#f8fafd; }
+.persona-theme :deep(.generation-status) { color:#7d6d77; }
+.persona-theme :deep(.process-body) { border-color:#eadde4;background:rgba(255,249,252,.95); }
+.persona-theme :deep(.process-title),.persona-theme :deep(.phase-active .phase-label),.persona-theme :deep(.model-active) { color:#91677d; }
+.persona-theme :deep(.is-pending .process-indicator) { background:#b77e99; }
+.persona-theme :deep(.process-metrics) { border-top-color:#eee2e9; }
+.response-setting-row { display:flex;justify-content:space-between;align-items:center;gap:16px;padding:14px 0; }
+.response-setting-row + .response-setting-row { border-top:1px solid #e5eaf1; }
+.response-setting-row label { font-size:14px;font-weight:500;color:#2f4058; }
+.roleplay-composer-bottom { display:flex;align-items:center;justify-content:flex-end;gap:10px; }
+.roleplay-composer-bottom > .btn-send,.roleplay-composer-bottom > .btn-stop { margin-left:auto;flex-shrink:0; }
 
 .chat-textarea {
   flex: 1;
@@ -2063,13 +2105,11 @@ onMounted(async () => {
 .assistant-welcome { min-height: 0; flex: 1; display: flex; flex-direction: column; align-items: center; overflow: auto; padding: 20px 32px 24px; }
 .welcome-copy { margin-top: auto; text-align: center; padding: 30px 0 38px; }
 .welcome-copy h1 { font-size: clamp(26px, 2.5vw, 36px); letter-spacing: -1px; font-weight: 600; color: #18212f; margin: 0 0 14px; }
-.welcome-copy p { font-size: 14px; color: var(--assistant-muted); margin: 0; }
 .assistant-start { width: min(1060px, 100%); margin-top: auto; }
 .assistant-suggestions { display: flex; flex-wrap: wrap; gap: 9px; margin-bottom: 22px; }
 .assistant-suggestions button { display: flex; align-items: center; gap: 9px; padding: 12px 15px; background: #fff; border: 1px solid var(--assistant-line); border-radius: 14px; font-size: 14px; color: #394556; cursor: pointer; }
 .assistant-suggestions button>span:last-child { margin-left: 9px; color: #62738a; }
 .assistant-suggestions button:hover { border-color: #8ea5c6; background: #edf3fc; }
-.assistant-footnote { font-size: 12px; color: var(--assistant-muted); text-align: center; margin: 10px 0 0; line-height: 1.5; }
 .assistant-main .chat-content { max-width: 1120px; height: auto; min-height: 0; }
 .assistant-main .chat-messages { min-height: 0; padding: 18px 30px; }
 .assistant-main .chat-message { animation: none; gap: 0; margin-bottom: 32px; }
@@ -2110,13 +2150,11 @@ onMounted(async () => {
   .assistant-welcome { padding: 0 16px 12px; }
   .welcome-copy { padding: 20px 0 38px; }
   .welcome-copy h1 { font-size: 24px; line-height: 1.4; }
-  .welcome-copy p { font-size: 13px; line-height: 1.7; }
   .assistant-suggestions { gap: 8px; margin-bottom: 16px; }
   .assistant-suggestions button { font-size: 13px; min-height: 40px; padding: 9px 12px; gap: 6px; border-radius: 12px; }
   .assistant-main .chat-input-area { padding: 9px 12px 10px; }
   .assistant-main .chat-messages { padding: 20px 19px 8px; }
   .assistant-main .chat-message.assistant .message-bubble { font-size: 16px; line-height: 1.85; }
-  .assistant-footnote { font-size: 12px; margin-top: 8px; }
 }
 @media (max-width: 900px) and (max-height: 600px) {
   // Keep the composer reachable when a phone keyboard or landscape viewport

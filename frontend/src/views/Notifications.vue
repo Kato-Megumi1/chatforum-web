@@ -2,7 +2,7 @@
   <div class="notifications-page"><div class="notifications-wrapper">
     <el-page-header @back="$router.push('/forum')" title="返回社区" />
     <section class="notification-card">
-      <div class="heading"><div><h1>消息通知</h1><p>所有消息 · {{ notifications.unreadCount }} 条未读</p></div><el-button :disabled="!notifications.unreadCount" :loading="markingAll" @click="readAll">全部已读</el-button></div>
+      <div class="heading"><div><h1>消息通知</h1><p>{{ notifications.unreadCount }} 条未读</p></div><el-button :disabled="!notifications.unreadCount" :loading="markingAll" @click="readAll">全部已读</el-button></div>
       <div class="notification-filters">
         <nav class="notification-types" aria-label="消息分类">
           <button v-for="item in notificationTypes" :key="item.value" :class="{ active: notificationType === item.value }" :aria-pressed="notificationType === item.value" @click="setType(item.value)">{{ item.label }}</button>
@@ -21,7 +21,7 @@
       <el-pagination v-if="total > 20" :disabled="loading" layout="prev, pager, next" :pager-count="5" :page-size="20" :total="total" v-model:current-page="page" @current-change="load" />
     </section>
     <section class="notification-card subscription-card">
-      <div class="heading"><div><h2>持续追踪</h2><p>后台检查更新并合并站内提醒，不需要保持页面打开。</p></div><el-button :loading="subscriptionsLoading" :disabled="subscriptionBusy.size > 0" @click="loadSubscriptions">刷新追踪</el-button></div>
+      <div class="heading"><h2>持续追踪</h2><el-button :loading="subscriptionsLoading" :disabled="subscriptionBusy.size > 0" @click="loadSubscriptions">刷新追踪</el-button></div>
       <el-alert v-if="subscriptionsError" title="追踪列表暂时无法加载，请重试。" type="error" :closable="false" />
       <div v-loading="subscriptionsLoading" class="subscription-list">
         <el-empty v-if="!subscriptions.length && !subscriptionsLoading && !subscriptionsError" description="尚未开启追踪，可在论坛或帖子详情中添加" />
@@ -30,7 +30,6 @@
           <div class="subscription-actions"><el-button :disabled="subscriptionBusy.has(item.id)" @click="setWatchEnabled(item)">{{ item.enabled ? '暂停' : '开启' }}</el-button><el-button type="danger" plain :disabled="subscriptionBusy.has(item.id)" @click="removeWatch(item)">删除追踪</el-button></div>
         </article>
       </div>
-      <p class="subscription-note">重新开启只检查开启后的更新，不补发暂停期间的提醒。帖子下架后不会通过旧通知展示其内容。</p>
     </section>
   </div></div>
 </template>
@@ -165,7 +164,7 @@ h2 { margin: 0; font-size: 20px; }
 .subscription-list { min-height: 80px; }
 .subscription-item { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px; padding: 20px 0; border-bottom: 1px solid var(--border-light); }
 .subscription-scope { min-width: 0; flex: 1; }.subscription-scope strong { margin-right: 10px; }.subscription-scope p { overflow-wrap: anywhere; margin: 10px 0; font-size: 13px; }
-.subscription-scope span, .subscription-note { font-size: 12px; color: var(--text-secondary); line-height: 1.7; }
+.subscription-scope span { font-size: 12px; color: var(--text-secondary); line-height: 1.7; }
 .subscription-actions { display: flex; gap: 8px; }.subscription-actions .el-button { margin-left: 0; }
 .notification-list { margin-top: 20px; min-height: 160px; }
 .notification-filters { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }

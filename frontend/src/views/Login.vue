@@ -6,7 +6,6 @@
           <ChatDotRound />
         </el-icon>
         <h1>ChatForum</h1>
-        <p>智能对话与社区交流平台</p>
       </div>
       <el-form
         ref="formRef"
@@ -49,7 +48,6 @@
     </div>
     <el-dialog v-model="recoveryVisible" title="找回密码" class="recovery-dialog" width="min(460px, calc(100vw - 32px))"
       :close-on-click-modal="false" :close-on-press-escape="!resetting" :show-close="!resetting" @closed="clearRecoverySecrets">
-      <p class="recovery-intro">通过注册邮箱验证身份，设置新密码后重新登录。</p>
       <el-form ref="recoveryRef" :model="recovery" :rules="recoveryRules" label-position="top" size="large" :disabled="resetting">
         <el-form-item label="注册邮箱" prop="email">
           <el-input v-model="recovery.email" placeholder="请输入注册邮箱" autocomplete="email" maxlength="191" @input="recovery.code = ''" />
@@ -202,11 +200,6 @@ const handleLogin = async () => {
     color: #303133;
   }
 
-  p {
-    margin: 0;
-    font-size: 14px;
-    color: #909399;
-  }
 }
 
 .login-footer {
@@ -231,7 +224,6 @@ const handleLogin = async () => {
   &:hover { text-decoration: underline; }
   &:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; border-radius: 3px; }
 }
-.recovery-intro { margin: 0 0 22px; color: #697586; line-height: 1.6; }
 .recovery-code-row { display: flex; gap: 10px; width: 100%; .el-input { min-width: 0; flex: 1; } .el-button { flex: 0 0 auto; margin: 0; } }
 .recovery-notice { margin: -4px 0 18px; }
 @media (max-width: 640px) {

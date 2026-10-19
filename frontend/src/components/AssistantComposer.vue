@@ -7,7 +7,7 @@
       </div>
     </div>
     <el-input class="chat-textarea" :model-value="modelValue" @update:model-value="emit('update:modelValue', $event)" type="textarea"
-      :autosize="{ minRows: 3, maxRows: 10 }" placeholder="发消息、提问题，或描述你想完成的事…" :disabled="busy"
+      :autosize="{ minRows: 3, maxRows: 10 }" placeholder="输入消息…" :disabled="busy"
       @paste="pasteFiles" @keydown.enter="emit('enter', $event)" aria-label="消息输入" />
     <div class="composer-bottom">
       <div class="composer-tools">
@@ -23,7 +23,8 @@
           <button :class="{ selected: mode === 'agent' }" :aria-pressed="mode === 'agent'" :disabled="busy" @click="emit('update:mode', 'agent')"><el-icon><MagicStick /></el-icon>Agent</button>
         </div>
         <button class="tool-pill coding-button" :class="{ enabled: coding && mode === 'agent' }" @click="emit('coding')" :disabled="busy" aria-label="打开编程 Agent 工作区"><span class="code-symbol">&lt;/&gt;</span><span class="coding-label-desktop">编程 Agent</span><span class="coding-label-mobile">编程</span></button>
-        <button class="tool-pill settings-tool" aria-label="模型设置" @click="emit('settings')"><el-icon><Setting /></el-icon></button>
+        <AnswerPreferences :deep-thinking="deepThinking" :web-search="webSearch" :busy="busy || uploading || removing"
+          @update:deep-thinking="emit('update:deepThinking',$event)" @update:web-search="emit('update:webSearch',$event)" @settings="emit('settings')" />
       </div>
       <button v-if="busy && !uploading && !removing" class="composer-send stop" aria-label="停止生成" @click="emit('stop')"><span></span></button>
       <button v-else class="composer-send btn-send" aria-label="发送消息" :disabled="(!modelValue.trim() && !files?.length) || uploading || removing" @pointerdown.prevent @click="emit('send')"><el-icon><Top /></el-icon></button>
@@ -33,12 +34,13 @@
 
 <script setup lang="ts">
 import { ref } from 'vue';
+import AnswerPreferences from '@/components/AnswerPreferences.vue';
 import { CHAT_FILE_ACCEPT, type ChatFile } from '@/utils/chat-files';
 import { clipboardFiles } from '@/utils/clipboard-files';
-const props = defineProps<{ modelValue: string; mode: string; busy: boolean; coding: boolean; files?: ChatFile[]; libraryFiles?:ChatFile[]; uploading?: boolean; removing?: boolean }>();
+const props = defineProps<{ modelValue: string; mode: string; busy: boolean; coding: boolean; deepThinking:boolean;webSearch:boolean; files?: ChatFile[]; libraryFiles?:ChatFile[]; uploading?: boolean; removing?: boolean }>();
 const fileInput = ref<HTMLInputElement>();
 const uploadMenu=ref(false);
-const emit = defineEmits(['update:modelValue', 'update:mode', 'enter', 'send', 'stop', 'settings', 'coding', 'disableCoding', 'upload', 'files', 'remove']);
+const emit = defineEmits(['update:modelValue', 'update:mode', 'update:deepThinking','update:webSearch', 'enter', 'send', 'stop', 'settings', 'coding', 'disableCoding', 'upload', 'files', 'remove']);
 function openPicker(){
   uploadMenu.value=false;
   if(props.busy || props.uploading || props.removing)return;
@@ -98,7 +100,8 @@ button:focus-visible { outline: 2px solid #668bdf; outline-offset: 2px; }
   .composer-modes button { min-height: 40px; padding: 0 8px; gap: 3px; border-radius: 9px; font-size: 12px; }
   .tool-pill { flex-shrink: 0; min-height: 40px; border-radius: 10px; font-size: 12px; padding: 0 7px; gap: 4px; }
   .coding-label-desktop, .settings-tool { display: none; }
-  .coding-label-mobile { display: inline; }
+  .coding-label-mobile { display: none; }
+  .coding-button { width:34px;padding:0;justify-content:center; }
   .mobile-settings-menu { display: flex; margin-top: 6px; background: transparent; }
   .composer-send { flex-basis: 40px; width: 40px; height: 40px; }
   .attachment-remove { width: 36px; height: 36px; }

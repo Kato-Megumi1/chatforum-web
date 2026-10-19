@@ -109,7 +109,7 @@ const deferred = () => { let resolve; const promise = new Promise(r => { resolve
       denied.resolve();
       await page.locator('article.post-card').first().waitFor({ state: 'hidden' });
       if (status === 409) {
-        await page.getByText('这份列表快照已失效，请刷新首屏查看最新结果。', { exact: true }).waitFor();
+        await page.getByText('列表已过期，请刷新。', { exact: true }).waitFor();
         await page.getByRole('button', { name: '刷新首屏', exact: true }).click();
       } else {
         await page.getByText('暂时没能加载帖子，请重试', { exact: true }).waitFor();

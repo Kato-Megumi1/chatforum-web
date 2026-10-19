@@ -32,13 +32,13 @@
           <el-badge :value="directMessages.total" :hidden="!directMessages.total" :max="99" class="notification-badge"><el-button class="notification-button" circle text aria-label="社区私信" @click="$router.push('/messages')"><el-icon><Message /></el-icon></el-button></el-badge>
           <el-badge :value="notifications.unreadCount" :hidden="!notifications.unreadCount" :max="99" class="notification-badge"><el-button class="notification-button" circle text aria-label="消息通知" @click="$router.push('/notifications')"><el-icon><Bell /></el-icon></el-button></el-badge>
           <el-dropdown trigger="click">
-            <div class="user-info">
+            <button type="button" class="user-info" :aria-label="`账号菜单，${userStore.user.username}`" :title="userStore.user.username">
               <el-avatar :size="34" :src="userStore.user.avatar" class="user-avatar">
                 {{ userStore.user.username.charAt(0).toUpperCase() }}
               </el-avatar>
               <span class="username">{{ userStore.user.username }}</span>
               <el-icon class="arrow-icon"><ArrowDown /></el-icon>
-            </div>
+            </button>
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item @click="$router.push('/user/profile')">
@@ -230,8 +230,14 @@ const handleLogout = async () => {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+  min-height: 44px;
   cursor: pointer;
   padding: 4px 14px;
+  font: inherit;
+  line-height: 1.5;
+  text-align: left;
+  background: transparent;
   border-radius: 24px;
   transition: all var(--transition);
   border: 1px solid transparent;
@@ -239,6 +245,11 @@ const handleLogout = async () => {
   &:hover {
     background: var(--bg-page);
     border-color: var(--border-color);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
   }
 }
 
@@ -248,7 +259,13 @@ const handleLogout = async () => {
 }
 
 .username {
+  display: block;
   font-size: 14px;
+  // el-dropdown inherits line-height:1. Horizontal ellipsis needs overflow:hidden,
+  // so provide a full font line box instead of clipping descenders such as g/p/y.
+  line-height: 1.5;
+  padding-block: 1px;
+  min-width: 0;
   color: var(--text-primary);
   font-weight: 500;
   max-width: 100px;

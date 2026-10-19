@@ -7,7 +7,6 @@
     <aside class="inbox-pane">
       <header class="inbox-heading">
         <div>
-          <p class="eyebrow">社区 · 一对一交流</p>
           <h1>私信</h1>
         </div>
         <el-button circle aria-label="新私信" @click="openContacts"
@@ -33,12 +32,7 @@
         </button>
       </div>
       <div class="inbox-tools">
-        <span>{{
-          box === "requests"
-            ? "由你决定是否开始交流"
-            : "只保留你与社区成员的对话"
-        }}</span
-        ><el-button
+        <el-button
           text
           size="small"
           :loading="loadingList"
@@ -57,13 +51,6 @@
         <div v-else-if="!threads.length && !loadingList" class="list-empty">
           <el-icon><Message /></el-icon>
           <h3>{{ box === "requests" ? "暂时没有消息请求" : "还没有私信" }}</h3>
-          <p>
-            {{
-              box === "requests"
-                ? "陌生人的第一条消息会放在这里。"
-                : "在成员主页点击“私信”，或选择一位成员聊聊。"
-            }}
-          </p>
           <el-button v-if="box === 'inbox'" plain @click="openContacts"
             >发起私信</el-button
           >
@@ -106,9 +93,6 @@
           >更早的对话</el-button
         >
       </div>
-      <footer class="inbox-foot">
-        <el-icon><Lock /></el-icon>与 AI 对话分开，不进入模型记忆
-      </footer>
     </aside>
     <main class="conversation-pane">
       <div
@@ -122,15 +106,8 @@
           <el-icon><ChatLineRound /></el-icon>
         </div>
         <h2>
-          {{ threadError ? "这段私信暂时无法打开" : "聊聊你们共同感兴趣的事" }}
+          {{ threadError ? "这段私信暂时无法打开" : "选择一个对话" }}
         </h2>
-        <p>
-          {{
-            threadError
-              ? "请返回列表重试，或选择另一位成员。"
-              : "关注、讨论和灵感，都可以从一句问候开始。"
-          }}
-        </p>
         <el-button v-if="threadError" plain round @click="backToInbox"
           >返回列表</el-button
         ><el-button v-else type="primary" round @click="openContacts"
@@ -156,8 +133,7 @@
               >{{ conversation.peer.username.slice(0, 1) }}</el-avatar
             >
             <div>
-              <strong>{{ conversation.peer.username }}</strong
-              ><small>社区成员 · 私信</small>
+              <strong>{{ conversation.peer.username }}</strong>
             </div></router-link
           >
           <el-dropdown trigger="click"
@@ -233,12 +209,6 @@
             @click="loadOlder"
             >查看更早消息</el-button
           >
-          <p
-            v-if="!messages.length && !conversation.blocked"
-            class="first-message"
-          >
-            从这里开始你们的对话
-          </p>
           <article
             v-for="message in messages"
             :key="message.id"
@@ -262,7 +232,7 @@
           class="send-status"
           role="status"
         >
-          尚未确认发送结果，重试会使用同一条消息编号。<el-button
+          发送结果未确认，请重试。<el-button
             link
             :disabled="sending"
             @click="send(true)"
@@ -288,8 +258,7 @@
             @keydown="onComposerKey"
           />
           <div class="composer-bottom">
-            <span>Enter 发送 · Shift + Enter 换行</span
-            ><el-button
+            <el-button
               type="primary"
               round
               native-type="submit"
@@ -317,10 +286,7 @@
         @input="scheduleContactSearch"
       />
       <div class="contact-results" v-loading="searchingContacts">
-        <p v-if="contactQuery.trim().length < 2">
-          只搜索用户名，不查找或展示邮箱、手机号。
-        </p>
-        <p v-else-if="!contactResults.length && !searchingContacts">
+        <p v-if="contactQuery.trim().length >= 2 && !contactResults.length && !searchingContacts">
           没有找到匹配的成员
         </p>
         <button
@@ -348,7 +314,6 @@ import {
   ArrowRight,
   ChatLineRound,
   EditPen,
-  Lock,
   Message,
   MoreFilled,
   Promotion,
@@ -1007,12 +972,6 @@ onUnmounted(() => {
   justify-content: space-between;
   padding: 26px 24px 20px;
 }
-.eyebrow {
-  font-size: 11px;
-  color: #8492a4;
-  letter-spacing: 1px;
-  margin-bottom: 6px;
-}
 .inbox-heading h1 {
   font-size: 27px;
   letter-spacing: -1px;
@@ -1048,7 +1007,7 @@ onUnmounted(() => {
   padding: 14px 20px 8px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 8px;
   font-size: 11px;
   color: #8a96a6;
@@ -1114,15 +1073,6 @@ onUnmounted(() => {
 }
 .load-threads {
   width: 100%;
-}
-.inbox-foot {
-  padding: 17px 20px;
-  border-top: 1px solid #edf0f4;
-  color: #9aa4b3;
-  font-size: 10px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
 }
 .conversation-pane {
   flex: 1;
@@ -1242,12 +1192,6 @@ onUnmounted(() => {
   padding: 26px 30px;
   overscroll-behavior: contain;
 }
-.first-message {
-  text-align: center;
-  color: #a5afbb;
-  font-size: 12px;
-  margin-top: 50px;
-}
 .direct-message {
   display: flex;
   align-items: flex-start;
@@ -1306,14 +1250,10 @@ onUnmounted(() => {
 }
 .composer-bottom {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   align-items: center;
   padding-top: 8px;
   gap: 8px;
-}
-.composer-bottom > span {
-  font-size: 10px;
-  color: #a3afbd;
 }
 .composer-bottom .el-button {
   min-width: 82px;
@@ -1412,17 +1352,11 @@ onUnmounted(() => {
   .direct-composer :deep(.el-textarea__inner) {
     font-size: 16px;
   }
-  .composer-bottom > span {
-    font-size: 9px;
-  }
   .conversation-empty {
     padding: 30px;
   }
   .new-below {
     bottom: 162px;
-  }
-  .inbox-foot {
-    font-size: 10px;
   }
   .thread-item {
     padding: 17px 20px;

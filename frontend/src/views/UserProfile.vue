@@ -16,7 +16,7 @@
             <el-avatar :size="88" :src="userStore.user.avatar" :key="userStore.user.avatar" class="profile-avatar clickable" @click="avatarInput?.click()">
               {{ userStore.user.username.charAt(0).toUpperCase() }}
             </el-avatar>
-            <div class="avatar-hint">点击更换头像</div>
+            <button type="button" class="avatar-hint" @click="avatarInput?.click()">更换头像</button>
           </div>
           <div class="info-section">
             <h1 class="profile-name">{{ userStore.user.username }}</h1>
@@ -25,7 +25,6 @@
               <el-tag type="success" effect="plain" round>{{ userStore.user.points }} 积分</el-tag>
             </div>
             <p class="profile-bio" v-if="userStore.user.bio">{{ userStore.user.bio }}</p>
-            <p class="profile-bio placeholder" v-else>还没有填写个人简介...</p>
           </div>
         </div>
         <el-tabs v-model="activeTab" class="profile-tabs">
@@ -95,7 +94,7 @@
           <el-input v-model="passwordForm.confirmPassword" type="password" show-password autocomplete="new-password" aria-label="确认新密码" />
         </el-form-item>
       </el-form>
-      <p class="password-note">修改后，之前的登录会话将失效，请使用新密码重新登录。</p>
+      <p class="password-note">修改密码后，所有设备需重新登录。</p>
       <template #footer>
         <el-button :disabled="changingPassword" @click="passwordDialog = false">取消</el-button>
         <el-button type="primary" :loading="changingPassword" @click="handleChangePassword">确认修改</el-button>
@@ -290,11 +289,16 @@ watch(() => userStore.getAuthSession(), (session, previous) => {
 }
 
 .avatar-hint {
+  border: 0;
+  padding: 4px 0;
+  background: transparent;
   text-align: center;
   font-size: 12px;
   color: var(--text-secondary);
   margin-top: 6px;
+  cursor: pointer;
 }
+.avatar-hint:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
 
 .info-section {
   flex: 1;

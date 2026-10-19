@@ -66,6 +66,7 @@ const output = join(__dirname, '../../.local/community-ui'); mkdirSync(output, {
     });
 
     await page.goto(base + 'notifications');
+    assert.equal(await page.locator('.subscription-card .heading p, .subscription-note').count(), 0, 'No redundant background-processing tutorial');
     await page.getByText('暂时没能加载消息通知，请重试', { exact: true }).waitFor();
     assert.equal(await page.getByText('暂时没有新消息', { exact: true }).count(), 0);
     await page.screenshot({ path: join(output, `notifications-error-${width}.png`), fullPage: true });
@@ -92,7 +93,7 @@ const output = join(__dirname, '../../.local/community-ui'); mkdirSync(output, {
     await types.getByRole('button', { name: '新增关注', exact: true }).click();
     await page.getByText('FOLLOW Synthetic notification 301', { exact: true }).waitFor();
     assert.equal(notificationQueries.at(-1).type, 'FOLLOW'); assert.equal(notificationQueries.at(-1).page, '1');
-    await page.getByText('所有消息 · 20 条未读', { exact: true }).waitFor();
+    await page.getByText('20 条未读', { exact: true }).waitFor();
 
     const started = new Promise(resolve => { likeStarted = resolve; });
     const lateResponse = page.waitForResponse(response => {
@@ -106,7 +107,7 @@ const output = join(__dirname, '../../.local/community-ui'); mkdirSync(output, {
     releaseLike(); await lateResponse; await page.waitForTimeout(100);
     assert.equal(await page.getByText('LIKE Synthetic notification 201', { exact: true }).count(), 0);
     assert.equal(await types.getByRole('button', { name: '系统与追踪', exact: true }).getAttribute('aria-pressed'), 'true');
-    await page.getByText('所有消息 · 20 条未读', { exact: true }).waitFor();
+    await page.getByText('20 条未读', { exact: true }).waitFor();
     assert.equal(await page.locator('.notification-list').getAttribute('aria-busy'), 'false');
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'Notification type filters must not overflow the viewport');
     await page.screenshot({ path: join(output, `notification-types-${width}.png`), fullPage: true });

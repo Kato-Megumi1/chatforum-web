@@ -4,8 +4,35 @@ import { useUserStore } from '@/stores/user';
 import { readSse } from './sse';
 
 export interface RunResult { status: string; error?: string; result?: { content: string; ragMetadata?: any } }
+export type GenerationPhase = 'queued' | 'context' | 'understanding' | 'retrieving' | 'evidence' | 'generating' | 'tools' | 'verifying' | 'delivering' | 'completed';
 export interface GenerationProgress { stage: 'preparing' | 'generating' | 'tools' | 'verifying' | 'completed';
-  elapsedMs: number; firstTokenMs: number | null; stages: Array<{ stage: string; durationMs: number }> }
+  elapsedMs: number; firstTokenMs: number | null; stages: Array<{ stage: string; durationMs: number }>;
+  phase?: GenerationPhase; phaseElapsedMs?: number; queueMs?: number; modelCalls?: number; activeModelCalls?: number;
+  phases?: Array<{ phase: GenerationPhase; durationMs: number; modelCalls: number }> }
+const stages = ['preparing', 'generating', 'tools', 'verifying', 'completed'] as const;
+const phases: GenerationPhase[] = ['queued', 'context', 'understanding', 'retrieving', 'evidence', 'generating', 'tools', 'verifying', 'delivering', 'completed'];
+const time = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER;
+const count = (value: unknown): value is number => time(value) && Number.isSafeInteger(value);
+const object = (value: unknown): value is Record<string, any> => !!value && typeof value === 'object' && !Array.isArray(value);
+// Public telemetry only: never retain provider reasoning, arbitrary labels, prompts or tool data.
+export function parseGenerationProgress(value: unknown): GenerationProgress | null {
+  if (!object(value) || !stages.includes(value.stage) || !time(value.elapsedMs)) return null;
+  const seen = new Set<string>(), seenPhases = new Set<string>();
+  const result: GenerationProgress = { stage: value.stage, elapsedMs: value.elapsedMs,
+    firstTokenMs: time(value.firstTokenMs) && value.firstTokenMs <= value.elapsedMs ? value.firstTokenMs : null,
+    stages: Array.isArray(value.stages) ? value.stages.slice(0, 40).filter(row => {
+      if (!object(row) || !stages.includes(row.stage) || !time(row.durationMs) || seen.has(row.stage)) return false;
+      seen.add(row.stage); return true;
+    }).map(row => ({ stage: row.stage, durationMs: row.durationMs })) : [] };
+  if (phases.includes(value.phase)) result.phase = value.phase;
+  for (const key of ['phaseElapsedMs', 'queueMs'] as const) if (time(value[key])) result[key] = value[key];
+  for (const key of ['modelCalls', 'activeModelCalls'] as const) if (count(value[key])) result[key] = value[key];
+  if (Array.isArray(value.phases)) result.phases = value.phases.slice(0, 40).filter(row => {
+    if (!object(row) || !phases.includes(row.phase) || !time(row.durationMs) || !count(row.modelCalls) || seenPhases.has(row.phase)) return false;
+    seenPhases.add(row.phase); return true;
+  }).map(row => ({ phase: row.phase, durationMs: row.durationMs, modelCalls: row.modelCalls }));
+  return result;
+}
 class StreamAccessError extends Error {}
 
 export async function watchChatRun(id: string, signal: AbortSignal,
@@ -39,8 +66,8 @@ export async function watchChatRun(id: string, signal: AbortSignal,
             throw new StreamAccessError('回答流顺序异常，请重新打开对话');
           offset = value.offset; failures = 0; onDelta(value.text);
         } else if (frame.event === 'progress') {
-          if (['preparing','generating','tools','verifying','completed'].includes(value.stage) &&
-              Number.isFinite(value.elapsedMs) && value.elapsedMs >= 0) onProgress?.(value);
+          const progress = parseGenerationProgress(value);
+          if (progress) onProgress?.(progress);
         } else if (frame.event === 'complete' || frame.event === 'terminal') return value;
       }
       throw new Error('SSE disconnected');

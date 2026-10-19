@@ -45,10 +45,9 @@
                   style="width: 100%"
                 >
                   <el-option v-for="tag in tagOptions" :key="tag.name" :label="tag.name" :value="tag.name" />
-                  <template #footer>
+                  <template v-if="tagsError || tagsHasMore" #footer>
                     <el-button v-if="tagsError" link @click="loadTags(false)">标签暂未加载，重试</el-button>
                     <el-button v-else-if="tagsHasMore" link :loading="tagsLoading" @click="loadTags(true)">加载更多标签</el-button>
-                    <span v-else class="tag-options-note">可搜索所有已使用标签，也可输入新标签</span>
                   </template>
                 </el-select>
               </el-form-item>
@@ -280,7 +279,6 @@ onUnmounted(() => { tagsRequestId++; clearTimeout(timer); saveDraft(); window.re
 }
 .editor-heading { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 12px; }
 .draft-state { color: var(--text-secondary); font-size: 12px; margin-bottom: 16px; }
-.tag-options-note { font-size: 12px; color: var(--text-secondary); line-height: 1.7; }
 .editor-switch { display: flex; width: 100%; gap: 8px; margin-bottom: 10px; }
 .plain-preview { min-height: 360px; white-space: pre-wrap; overflow-wrap: anywhere; width: 100%; padding: 16px; line-height: 1.9; color: var(--text-primary); border: 1px solid var(--border-light); border-radius: 10px; }
 

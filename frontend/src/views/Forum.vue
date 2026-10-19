@@ -3,7 +3,6 @@
     <div class="forum-hero">
       <div class="hero-content">
         <h1>天大论坛</h1>
-        <p>海棠花开，北洋情深 — 天津大学校园交流社区</p>
       </div>
       <el-button v-if="userStore.user" type="primary" size="large" class="btn-publish" @click="$router.push('/forum/create')">
         <el-icon><Edit /></el-icon>
@@ -84,9 +83,9 @@
         <p v-if="windowCountsNote" class="feed-note desktop-feed-detail">{{ windowCountsNote }}</p>
         <el-alert v-if="hotStatusNote" :title="hotStatusNote" :type="hotStatus === 'stale' ? 'warning' : 'info'" :closable="false" />
         <el-alert v-if="searchNote" :title="searchNote" type="warning" :closable="false" />
-        <div v-if="userStore.user && sortBy !== 'likes'" class="feed-tracking desktop-feed-detail"><el-button :loading="tracking" :disabled="!canTrack || trackedScopes.has(trackingKey)" @click="trackCurrent">{{ trackedScopes.has(trackingKey) ? '已开启追踪' : sortBy === 'popular' ? '追踪热榜变化' : '追踪新帖' }}</el-button><span>{{ trackingHint }}</span><router-link to="/notifications">管理追踪</router-link></div>
+        <div v-if="userStore.user && sortBy !== 'likes'" class="feed-tracking desktop-feed-detail"><el-button :loading="tracking" :disabled="!canTrack || trackedScopes.has(trackingKey)" @click="trackCurrent">{{ trackedScopes.has(trackingKey) ? '已开启追踪' : sortBy === 'popular' ? '追踪热榜变化' : '追踪新帖' }}</el-button><span v-if="trackingHint">{{ trackingHint }}</span><router-link to="/notifications">管理追踪</router-link></div>
         <el-alert v-if="navigationNotice" :title="navigationNotice" type="info" :closable="false" />
-        <el-alert v-if="cursorExpired" title="这份列表快照已失效，请刷新首屏查看最新结果。" type="warning" :closable="false"><el-button link @click="refreshFirst">刷新首屏</el-button></el-alert>
+        <el-alert v-if="cursorExpired" title="列表已过期，请刷新。" type="warning" :closable="false"><el-button link @click="refreshFirst">刷新首屏</el-button></el-alert>
         <div v-if="loading && hasListSnapshot" class="feed-loading-status" role="status">{{ usingCachedSnapshot ? '正在核对更新，先显示上次列表' : '正在更新帖子…' }}</div>
         <div v-if="loadSlow" class="feed-retry-notice" role="status"><span>网络响应较慢，可以继续等待或重试。</span><el-button link @click="retryCurrentPage">重新加载</el-button></div>
         <el-alert v-if="loadError" :title="hasListSnapshot ? '更新失败，当前显示上次列表' : '暂时没能加载帖子，请重试'" type="warning" :closable="false"><el-button link @click="retryCurrentPage">重新加载</el-button></el-alert>
@@ -158,7 +157,7 @@
           </template>
         </div>
         <div class="mobile-filter-notes"><p v-if="coverageNote">{{ coverageNote }}</p><p v-if="windowCountsNote">{{ windowCountsNote }}</p><p v-if="updatedAt">更新于 {{ formatUpdatedAt(updatedAt) }}</p></div>
-        <section v-if="userStore.user && sortBy !== 'likes'" class="mobile-tracking" aria-label="持续追踪设置"><div><strong>持续追踪</strong><router-link to="/notifications" @click="mobileFiltersOpen = false">管理追踪</router-link></div><p>{{ trackingHint }}</p><el-button :loading="tracking" :disabled="!canTrack || trackedScopes.has(trackingKey)" @click="trackCurrent">{{ trackedScopes.has(trackingKey) ? '已开启追踪' : sortBy === 'popular' ? '追踪热榜变化' : '追踪新帖' }}</el-button></section>
+        <section v-if="userStore.user && sortBy !== 'likes'" class="mobile-tracking" aria-label="持续追踪设置"><div><strong>持续追踪</strong><router-link to="/notifications" @click="mobileFiltersOpen = false">管理追踪</router-link></div><p v-if="trackingHint">{{ trackingHint }}</p><el-button :loading="tracking" :disabled="!canTrack || trackedScopes.has(trackingKey)" @click="trackCurrent">{{ trackedScopes.has(trackingKey) ? '已开启追踪' : sortBy === 'popular' ? '追踪热榜变化' : '追踪新帖' }}</el-button></section>
         <div class="mobile-filter-actions"><el-button @click="clearFilters">清除筛选</el-button><el-button type="primary" @click="mobileFiltersOpen = false">查看帖子</el-button></div>
       </div>
     </el-drawer>
@@ -235,13 +234,13 @@ const hotBasis = ref('interaction'), hotStatus = ref(''), searchNote = ref(''), 
 const tracking = ref(false), trackedScopes = reactive(new Set<string>());
 let trackingRequest = 0;
 const hotBlocked = computed(() => sortBy.value === 'popular' && ['not_ready', 'disabled', 'unsupported_scope'].includes(hotStatus.value));
-const hotStatusNote = computed(() => ({ not_ready: '互动热榜正在构建，暂未就绪，请稍后刷新；不会猜测启用前的历史互动。',
-  disabled: '当前热榜未启用，暂时没有可用快照；可切换排行口径。', unsupported_scope: '当前热榜暂不支持此筛选范围，请调整筛选或切换发布衰减榜。',
-  stale: '榜单更新延迟，当前显示上次已完成的快照，请留意更新时间。' }[hotStatus.value] || ''));
+const hotStatusNote = computed(() => ({ not_ready: '热榜尚未就绪，请稍后刷新。',
+  disabled: '热榜未启用，可切换排行。', unsupported_scope: '此筛选暂不支持热榜，请调整筛选。',
+  stale: '热榜更新延迟，暂显示上次结果。' }[hotStatus.value] || ''));
 const canTrack = computed(() => !tagId.value && Array.from(searchText.value.trim()).length !== 1 && searchText.value.trim().length <= 160
   && !(sortBy.value === 'popular' && (hotPeriod.value === 'all' || hotBlocked.value)));
 const trackingKey = computed(() => JSON.stringify([sortBy.value, categoryId.value, searchText.value.trim(), hotPeriod.value, hotBasis.value]));
-const trackingHint = computed(() => tagId.value ? '标签筛选暂不支持追踪，可改用分类或关键词。' : !canTrack.value ? '追踪需有效的热榜窗口，关键词为空或 2～160 字符。' : '持续检查更新，默认每小时合并站内提醒；可在消息通知中暂停。');
+const trackingHint = computed(() => tagId.value ? '标签筛选暂不支持追踪，可改用分类或关键词。' : !canTrack.value ? '追踪需有效的热榜窗口，关键词为空或 2～160 字符。' : '');
 const loading = ref(false);
 const hasListSnapshot = ref(false), usingCachedSnapshot = ref(false), loadSlow = ref(false);
 const loadError = ref(false), hotPeriod = ref('week'), tagsExpanded = ref(false), container = ref<HTMLElement | null>(null);
@@ -249,7 +248,7 @@ const mobileFiltersOpen = ref(false);
 const mobileFilterCount = computed(() => Number(!!categoryId.value) + Number(!!tagId.value));
 const mobileFilterSummary = computed(() => [categories.value.find(cat => String(cat.id) === categoryId.value)?.name,
   tags.value.find(tag => String(tag.id) === tagId.value)?.name, searchText.value.trim()].filter(Boolean).join(' · ') || '已筛选');
-const mobileCoverageNote = computed(() => coverageNote.value.includes('仅显示首屏') ? '当前筛选只提供热榜首屏，可切换“最新”继续浏览。' : sortBy.value === 'likes' ? '点赞排序支持前 100 页，深度浏览请切换“最新”。' : '');
+const mobileCoverageNote = computed(() => coverageNote.value.includes('仅显示首屏') ? '此筛选仅显示首屏，查看更多请切换“最新”。' : sortBy.value === 'likes' ? '点赞榜限前 100 页，查看更多请切换“最新”。' : '');
 const mobileFeedLabel = computed(() => sortBy.value === 'popular'
   ? `${hotBasis.value === 'interaction' ? '近期互动' : '发布衰减'} · ${hotPeriod.value === 'today' ? '24 小时' : hotPeriod.value === 'week' ? '7 日' : '全部历史'}${coverageNote.value && !mobileCoverageNote.value ? ' · Top 200' : ''}`
   : sortBy.value === 'likes' ? '按点赞数排序' : updatedAt.value ? '更新于 ' + dayjs(updatedAt.value).format('MM-DD HH:mm') : '按发布时间排序');
@@ -335,25 +334,25 @@ async function navigate() {
 function applyFeed(data: any, key: string, isLikes: boolean, cachedTotal: number | null = likesTotal) {
   posts.value = data.data;
   hasListSnapshot.value = true;
-  searchNote.value = data.degraded ? '搜索服务暂不可用，当前使用数据库关键词查询，匹配方式可能与全文搜索不同。' : '';
+  searchNote.value = data.degraded ? '全文搜索暂不可用，已切换关键词匹配。' : '';
   hotStatus.value = data.snapshot?.status || '';
   windowCountsNote.value = data.snapshot?.windowCountsBasis === 'signed_net_deltas_since_activation'
-    ? '按窗口内已记录的互动净变化排名，取消点赞或删除评论可使净值减少；不补猜功能启用前的数据。卡片计数仍为快照时点累计数。' : '';
+    ? '按启用后记录的互动净变化排名；卡片显示累计数。' : '';
   cursorExpired.value = false;
   if (isLikes) {
     if (typeof data.total === 'number') { likesTotal = data.total; likesCountKey = key; }
     else if (cachedTotal !== null) { likesTotal = cachedTotal; likesCountKey = key; }
     hasMore.value = page.value < 100 && posts.value.length === pageSize.value && (likesTotal === null || page.value * pageSize.value < likesTotal);
     nextCursor.value = ''; updatedAt.value = '';
-    coverageNote.value = '点赞排序随互动变化，仅支持前 100 页；深度浏览请切换“最新”。';
+    coverageNote.value = '点赞榜限前 100 页，查看更多请切换“最新”。';
   } else {
     hasMore.value = !!data.hasMore && !!data.nextCursor;
     nextCursor.value = data.nextCursor || '';
     if (data.pageCursor) { cursor.value = data.pageCursor; cursorHistory[String(page.value)] = data.pageCursor; }
     updatedAt.value = data.snapshot?.asOf || data.asOf || '';
     coverageNote.value = data.snapshot?.paging === 'first_page_only'
-      ? '当前热门筛选仅显示首屏；请收紧筛选或切换“最新”继续浏览。'
-      : data.snapshot ? '热榜为前 200 条排序快照，并非全站完整结果。' : '';
+      ? '此筛选仅显示首屏，查看更多请切换“最新”。'
+      : data.snapshot ? '仅显示热榜前 200 条。' : '';
   }
 }
 
@@ -435,7 +434,7 @@ const loadPosts = async (options: { bypassCache?: boolean; preserveScroll?: bool
     // too, so a return from detail never opens a new snapshot behind the user.
     forumFeedCache.write(session, { ...requestedQuery, cursor: isLikes ? '' : data.pageCursor || requestedQuery.cursor }, snapshot, scopeRevision);
     if (restorePosition && sortBy.value === 'popular' && !data.pageCursor) {
-      navigationNotice.value = '当前热门筛选不保留翻页快照，已重新加载首屏排序。';
+      navigationNotice.value = '此筛选不支持翻页，已返回首屏。';
     }
     restorePosition = false;
   } catch (error: any) {
@@ -490,7 +489,7 @@ watch(() => route.fullPath, async () => {
   sortBy.value = f.sortBy; hotPeriod.value = f.hotPeriod; page.value = f.page; pageSize.value = f.limit; cursor.value = f.cursor;
   hotBasis.value = route.query.hotBasis === 'published' || (f.hotPeriod === 'all' && route.query.hotBasis !== 'interaction') ? 'published' : 'interaction';
   if (sortBy.value === 'popular' && hotPeriod.value === 'all' && hotBasis.value === 'interaction') {
-    hotBasis.value = 'published'; navigationNotice.value = '全部历史使用发布衰减榜；互动榜仅提供 24 小时或 7 日窗口。';
+    hotBasis.value = 'published'; navigationNotice.value = '全部历史仅支持“发布衰减”。';
   }
   restorePosition = initialLoad && savedNavigation?.path === route.fullPath;
   const key = scopedFilterKey(f);
