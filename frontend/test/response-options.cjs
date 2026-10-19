@@ -57,6 +57,7 @@ function storeFixture() {
     '@/utils/chat-files': { chatFileRef: file => ({ id: file.id, kind: file.kind, revision: file.revision }) },
     '@/utils/chat-model-selection': { selectedChatModel: () => 'qwen3.8-max' },
     '@/utils/roleplay-defaults': defaults,
+    '@/utils/file-resume': loadFile('utils/file-resume.ts'),
   });
   pinia.setActivePinia(pinia.createPinia());
   const store = module.useChatStore(); store.currentConversation = conversation;

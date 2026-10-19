@@ -11,7 +11,7 @@ const output = join(__dirname, '../../.local/chat-ux-review'); mkdirSync(output,
 const testKinds = (process.env.CHAT_UX_TEST_KINDS || 'ASSISTANT,ROLEPLAY').split(',');
 assert(testKinds.length && testKinds.every(kind => ['ASSISTANT', 'ROLEPLAY'].includes(kind)));
 const testFocus = process.env.CHAT_UX_TEST_FOCUS || 'all';
-assert(['all', 'parallel', 'typing'].includes(testFocus));
+assert(['all', 'parallel', 'typing', 'resume'].includes(testFocus));
 const viewer = { id: 99231, username: '虚构体验测试', email: 'synthetic@example.test', role: 'USER' };
 const conversations = [
   { id: 12001, title: '合成普通对话', conversationType: 'ASSISTANT' },
@@ -90,7 +90,7 @@ async function fixture(browser, width, kind, libraryMode = 'ready') {
     }
     if (path === '/api/chat/runs' && method === 'POST') {
       const input = request.postDataJSON(), run = { id: 'synthetic-ux-' + (state.runs.length + 1), input,
-        outcome: state.nextOutcome, status: 'RUNNING', reads: 0, finish: gate() };
+        outcome: state.nextOutcome, failedGeneration: state.failedGeneration, status: 'RUNNING', reads: 0, finish: gate() };
       state.runs.push(run); state.writes.push(input); return json({ id: run.id, status: run.status });
     }
     const run = state.runs.find(item => path.startsWith('/api/chat/runs/' + item.id));
@@ -103,7 +103,8 @@ async function fixture(browser, width, kind, libraryMode = 'ready') {
       if (run.status === 'CANCELLED') return sse('event: terminal\ndata: {"status":"CANCELLED"}\n\n');
       if (run.outcome === 'failure') {
         run.status = 'FAILED'; return sse('event: terminal\ndata: ' + JSON.stringify({ status: 'FAILED', error: '合成模型服务暂时不可用，请稍后重试。',
-          result: { failure: { code: 'MODEL_REQUEST_TIMEOUT', message: '合成模型等待超时，请重新发送。' } } }) + '\n\n');
+          result: { failure: { code: 'MODEL_REQUEST_TIMEOUT', message: '合成模型等待超时，请重新发送。' },
+            ...(run.failedGeneration ? { ragMetadata: { generation: run.failedGeneration } } : {}) } }) + '\n\n');
       }
       run.status = 'COMPLETED';
       const searchEnabled = runKind === 'ASSISTANT' && run.input.webSearch === true;
@@ -283,7 +284,7 @@ async function fixture(browser, width, kind, libraryMode = 'ready') {
         throw error;
       } finally { await f.close(); }
     }
-    for (const width of testFocus !== 'typing' && testKinds.includes('ASSISTANT') ? [390, 1440] : []) {
+    for (const width of ['all', 'parallel'].includes(testFocus) && testKinds.includes('ASSISTANT') ? [390, 1440] : []) {
       const f = await fixture(browser, width, 'ASSISTANT');
       try {
         const { page, state, textbox, busy, capture, selectByTitle } = f;
@@ -311,6 +312,90 @@ async function fixture(browser, width, kind, libraryMode = 'ready') {
         assert.equal(await page.locator('.generation-failure').count(), 0, 'Completed A cannot inherit B cancellation');
         assert.deepEqual(state.errors, []);
         console.log(`PASS ${width}px parallel ASSISTANT conversations: A/B admitted, pending isolated, background completion preserved B, stop targeted B only`);
+      } finally { await f.close(); }
+    }
+    for (const width of testFocus === 'resume' ? [390, 1440] : []) {
+      const f = await fixture(browser, width, 'ASSISTANT');
+      try {
+        const { page, state, textbox, busy, capture } = f;
+        const pointer = { draftId: '39411c9b-62be-44da-b3bc-1eac374f3925', revision: 2, hash: 'a'.repeat(64) };
+        const generation = { truncated: true, canContinue: true, fileIncomplete: true, fileFailureReason: 'OUTPUT_LIMIT', resumeFile: pointer };
+        state.messages.push({ id: 101, role: 'USER', conversationId: f.cid, content: '合成页面需求' },
+          { id: 102, role: 'ASSISTANT', conversationId: f.cid, content: '文件仍未完成。', ragMetadata: { generation } },
+          { id: 103, role: 'USER', conversationId: f.cid, content: '后续对话' },
+          { id: 104, role: 'ASSISTANT', conversationId: f.cid, content: '这是一条后续回答。' });
+        const reload = () => page.evaluate(async () => {
+          const store = document.querySelector('#app').__vue_app__.config.globalProperties.$pinia._s.get('chat');
+          store.dismissFailedAttempt(store.currentConversation.id); await store.selectConversation(store.currentConversation);
+        });
+        await reload(); const resume = page.getByRole('button', { name: '继续完成文件', exact: true }); await resume.waitFor();
+        assert.equal(await page.locator('.generation-status .process-current').first().innerText(), '文件未完成');
+        assert.equal(await page.locator('.file-resume-unavailable').count(), 0); assert.equal(state.writes.length, 0);
+        await capture('file-resume-available'); state.nextOutcome = 'failure'; await resume.click();
+        await page.getByRole('button', { name: '停止生成', exact: true }).waitFor();
+        assert.deepEqual(state.writes[0].resumeFile, pointer); assert.equal(state.writes[0].question, '继续完成文件');
+        assert.equal(await page.locator('.chat-message.user .message-text').last().innerText(), '继续完成文件');
+        state.runs[0].finish.resolve(); await busy(false); assert.equal(state.writes.length, 1, 'Resume failure cannot submit another paid task automatically');
+        assert.equal(await page.locator('.generation-failure .failure-heading strong').innerText(), '回答未生成');
+        assert.equal(await page.locator('.generation-failure p').innerText(), '合成模型等待超时，请重新发送。');
+        state.nextOutcome = 'success'; await page.locator('.generation-failure').getByRole('button', { name: '重新发送', exact: true }).click();
+        await page.getByRole('button', { name: '停止生成', exact: true }).waitFor();
+        assert.deepEqual(state.writes[1].resumeFile, pointer, 'Explicit retry retains the exact source revision/hash');
+        await page.getByRole('button', { name: '停止生成', exact: true }).click(); await busy(false); await textbox.fill('');
+        state.messages.splice(2); delete generation.resumeFile; await reload();
+        await page.getByRole('button', { name: '重新生成文件', exact: true }).waitFor();
+        await page.getByText('此回答未保留草稿，无法接着完成。', { exact: true }).waitFor();
+        assert.equal(await resume.count(), 0); await capture('file-resume-unavailable'); assert.deepEqual(state.errors, []);
+        console.log(`PASS ${width}px file resume: older answer sends versioned pointer, visible action name, explicit retry preserves pointer, old no-draft response is clear`);
+      } finally { await f.close(); }
+    }
+    for (const width of testFocus === 'resume' ? [390, 1440] : []) {
+      const f = await fixture(browser, width, 'ASSISTANT');
+      try {
+        const { page, state, textbox, busy, capture } = f;
+        const pointer = { draftId: '39411c9b-62be-44da-b3bc-1eac374f3925', revision: 3, hash: 'b'.repeat(64) };
+        const originalQuestion = '这是合成文件需求，先生成文件再模拟服务中断。';
+        state.failedGeneration = { truncated: true, canContinue: true, fileIncomplete: true,
+          fileFailureReason: 'SERVICE_ERROR', resumeFile: pointer, privatePrefix: 'PRIVATE_FILE_SOURCE_MUST_NOT_APPEAR' };
+        state.nextOutcome = 'failure'; await textbox.fill(originalQuestion);
+        await page.getByRole('button', { name: '发送消息', exact: true }).click();
+        await page.getByRole('button', { name: '停止生成', exact: true }).waitFor();
+        assert(!state.writes[0].resumeFile, 'The original task is not already a resume request');
+        state.runs[0].finish.resolve(); await busy(false);
+        const failure = page.locator('.generation-failure'); await failure.waitFor();
+        const resume = failure.getByRole('button', { name: '继续完成文件', exact: true }); await resume.waitFor();
+        assert.equal(await failure.locator('.failure-heading strong').innerText(), '文件尚未完成');
+        assert.equal(await failure.locator('p').innerText(), '文件草稿已保存，可以继续完成。');
+        assert(!(await failure.innerText()).includes('请重新发送'), 'The recovery card cannot instruct restarting the original task');
+        assert.equal(await failure.getByRole('button', { name: '重新发送', exact: true }).count(), 0,
+          'A newly saved server draft takes priority over re-running the original task');
+        assert.equal(await textbox.inputValue(), originalQuestion, 'The interrupted task still restores its original composer draft');
+        assert.equal(state.writes.length, 1, 'Saving a recovery pointer never auto-submits another model request');
+        await capture('service-failed-file-resume');
+        await textbox.fill('这是用户刚写的新草稿。'); await resume.click();
+        assert.equal(state.writes.length, 1, 'A resume click cannot discard a newer user draft');
+        assert.equal(await textbox.inputValue(), '这是用户刚写的新草稿。');
+        await textbox.fill(originalQuestion); state.nextOutcome = 'success'; state.failedGeneration = undefined;
+        await resume.click(); await page.getByRole('button', { name: '停止生成', exact: true }).waitFor();
+        assert.equal(state.writes.length, 2); assert.deepEqual(state.writes[1].resumeFile, pointer);
+        assert.equal(state.writes[1].question, '继续完成文件');
+        assert.equal(await page.locator('.chat-message.user .message-text').last().innerText(), '继续完成文件');
+        state.runs[1].finish.resolve(); await busy(false);
+        assert.equal(await failure.count(), 0); assert.deepEqual(state.errors, []);
+        console.log(`PASS ${width}px service-failed file: safe server draft action, no automatic retry, new composer draft protected, explicit click sends new pointer only`);
+      } finally { await f.close(); }
+    }
+    if (testFocus === 'resume') {
+      const f = await fixture(browser, 390, 'ROLEPLAY');
+      try {
+        f.state.messages.push({ id: 201, role: 'ASSISTANT', conversationId: f.cid, content: '这是一条合成角色回复。',
+          ragMetadata: { generation: { truncated: true, canContinue: true, fileIncomplete: true,
+            resumeFile: { draftId: '39411c9b-62be-44da-b3bc-1eac374f3925', revision: 2, hash: 'a'.repeat(64) } } } });
+        await f.page.evaluate(async () => { const store = document.querySelector('#app').__vue_app__.config.globalProperties.$pinia._s.get('chat'); await store.selectConversation(store.currentConversation); });
+        assert.equal(await f.page.getByRole('button', { name: '继续完成文件', exact: true }).count(), 0);
+        assert.equal(await f.page.getByRole('button', { name: '重新生成文件', exact: true }).count(), 0);
+        assert.equal(await f.page.locator('.file-resume-unavailable').count(), 0); assert.equal(f.state.writes.length, 0);
+        console.log('PASS 390px ROLEPLAY: stale file-resume metadata cannot expose file actions or no-draft explanations');
       } finally { await f.close(); }
     }
     for (const width of testFocus === 'typing' ? [390, 1440] : []) for (const kind of testKinds) {

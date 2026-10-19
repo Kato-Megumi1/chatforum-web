@@ -7,6 +7,9 @@ const compile = source => ts.transpileModule(source, {
 const helperModule = { exports: {} };
 new Function('module', 'exports', compile(readFileSync(join(__dirname, '../src/utils/generation-process.ts'), 'utf8')))(helperModule, helperModule.exports);
 const { generationProcessView, generationSeconds } = helperModule.exports;
+const fileResumeModule = { exports: {} };
+new Function('module', 'exports', compile(readFileSync(join(__dirname, '../src/utils/file-resume.ts'), 'utf8')))(fileResumeModule, fileResumeModule.exports);
+const resumePointer = { draftId: '39411c9b-62be-44da-b3bc-1eac374f3925', revision: 2, hash: 'a'.repeat(64) };
 
 test('only received public phases, numeric timings and counts enter the process view', () => {
   const view = generationProcessView({ stage: 'generating', phase: 'retrieving', elapsedMs: 2000,
@@ -78,14 +81,14 @@ function componentFixture() {
   const props = vue.reactive({ pending: true, progress: undefined, busy: false, allowThinking: false });
   const mounts = [], unmounts = [], timers = new Map(); let clock = 10000, nextTimer = 0;
   const imports = { vue: { ...vue, onMounted: fn => mounts.push(fn), onUnmounted: fn => unmounts.push(fn) },
-    '@/utils/generation-process': helperModule.exports };
+    '@/utils/generation-process': helperModule.exports, '@/utils/file-resume': fileResumeModule.exports };
   const mod = { exports: {} }, scope = vue.effectScope();
   scope.run(() => new Function('require', 'module', 'exports', 'defineProps', 'defineEmits', 'Date', 'setInterval', 'clearInterval',
-    compile(script + '\nexport { view, continuationLabel };'))(name => {
+    compile(script + '\nexport { view, continuationLabel, resumeFile, statusLabel };'))(name => {
       if (!Object.hasOwn(imports, name)) throw Error('Unexpected import ' + name); return imports[name];
     }, mod, mod.exports, () => props, () => () => {}, { now: () => clock },
     fn => { const key = ++nextTimer; timers.set(key, fn); return key; }, key => timers.delete(key)));
-  return { props, view: mod.exports.view, continuationLabel: mod.exports.continuationLabel, source, timers,
+  return { props, view: mod.exports.view, continuationLabel: mod.exports.continuationLabel, resumeFile: mod.exports.resumeFile, statusLabel: mod.exports.statusLabel, source, timers,
     mount: () => mounts.forEach(fn => fn()),
     advance: ms => { clock += ms; [...timers.values()].forEach(fn => fn()); },
     unmount: () => { unmounts.forEach(fn => fn()); scope.stop(); },
@@ -122,7 +125,13 @@ test('incomplete file delivery offers regeneration while ordinary answer truncat
   await vue.nextTick(); assert.equal(f.continuationLabel.value, '继续生成');
   f.props.generation = { truncated: true, canContinue: true, fileIncomplete: true, filePaths: ['demo.html'] };
   await vue.nextTick(); assert.equal(f.continuationLabel.value, '重新生成文件');
-  f.props.generation.fileIncomplete = false; await vue.nextTick(); assert.equal(f.continuationLabel.value, '继续生成');
+  f.props.pending = false; await vue.nextTick(); assert.equal(f.statusLabel.value, '文件未完成');
+  assert.equal(f.resumeFile.value, undefined);
+  f.props.generation.resumeFile = resumePointer; await vue.nextTick();
+  assert.equal(f.continuationLabel.value, '继续完成文件'); assert.deepEqual(f.resumeFile.value, resumePointer);
+  f.props.generation.resumeFile = { ...resumePointer, hash: 'INVALID' }; await vue.nextTick();
+  assert.equal(f.continuationLabel.value, '重新生成文件'); assert.equal(f.resumeFile.value, undefined);
+  f.props.generation.fileIncomplete = false; await vue.nextTick(); assert.equal(f.continuationLabel.value, '继续生成'); assert.equal(f.statusLabel.value, '已完成');
 });
 
 test('waiting and finished views share a keyboard-native disclosure with fixed text and reduced motion', () => {
@@ -135,6 +144,8 @@ test('waiting and finished views share a keyboard-native disclosure with fixed t
   assert.match(f.source, /summary:focus-visible/); assert.match(f.source, /prefers-reduced-motion:reduce/);
   assert.doesNotMatch(f.source, /v-html|reasoning_content|chain_of_thought|思考链/);
   assert.match(f.source, /generation\?\.truncated && generation\?\.canContinue/);
+  assert.match(f.source, /generation\?\.fileIncomplete && !resumeFile/);
+  assert.match(f.source, /此回答未保留草稿，无法接着完成。/);
 });
 
 test('enabling deep thinking alone cannot claim the provider actually emitted reasoning', () => {

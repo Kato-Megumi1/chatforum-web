@@ -174,10 +174,11 @@
               <div v-if="!msg.failure" class="message-role">{{ msg.role === 'user' ? userDisplayName : messageIdentity(msg) }}</div>
               <MessageAttachments v-if="isAssistant && msg.role==='user' && msg.ragMetadata?.messageAttachments?.length" :conversation-id="msg.conversationId" :files="msg.ragMetadata.messageAttachments" />
               <div v-if="msg.failure" class="generation-failure" role="alert">
-                <div class="failure-heading"><strong>{{ msg.failure.cancelled ? '已停止生成' : '回答未生成' }}</strong><span>{{ (msg.failure.elapsedMs / 1000).toFixed(1) }} 秒</span></div>
-                <p v-if="msg.failure.message !== '已停止生成'">{{ msg.failure.message }}</p>
+                <div class="failure-heading"><strong>{{ failureHeading(msg) }}</strong><span>{{ (msg.failure.elapsedMs / 1000).toFixed(1) }} 秒</span></div>
+                <p v-if="failureDescription(msg)">{{ failureDescription(msg) }}</p>
                 <div class="failure-actions">
-                  <el-button v-if="msg.failure.retryable" size="small" type="primary" plain :disabled="chatStore.isStreaming" @click="retryFailedAnswer(msg)">重新发送</el-button>
+                  <el-button v-if="recoverableFile(msg)" size="small" type="primary" plain :disabled="chatStore.isStreaming" @click="continueAnswer(msg)">继续完成文件</el-button>
+                  <el-button v-else-if="msg.failure.retryable" size="small" type="primary" plain :disabled="chatStore.isStreaming" @click="retryFailedAnswer(msg)">重新发送</el-button>
                   <el-button size="small" text :disabled="chatStore.isStreaming" @click="chatStore.dismissFailedAttempt(msg.conversationId)">移除</el-button>
                 </div>
               </div>
@@ -339,6 +340,7 @@ import GenerationStatus from '@/components/GenerationStatus.vue';
 import { uploadChatFiles, chatFileKey, type ChatFile } from '@/utils/chat-files';
 import { recoverChatDraft, sameDraftFiles, sameDraftSession } from '@/utils/chat-draft-recovery';
 import { conversationResponseOptions, defaultKatoKnowledgeBaseId } from '@/utils/roleplay-defaults';
+import { readFileResume, readRecoverableFileGeneration } from '@/utils/file-resume';
 import { publicAsset, CONNECTION_SETTINGS_ENABLED } from '@/utils/api';
 import { useChatStore } from '@/stores/chat';
 import { useUserStore } from '@/stores/user';
@@ -785,8 +787,12 @@ const handleNewChat = async () => {
 
 const sendingLocks = new Set<number | 'new'>();
 const currentSendLocked = () => sendingLocks.has(chatStore.currentConversation?.id ?? 'new');
+const recoverableFile = (message: any) => isAssistant.value && readRecoverableFileGeneration(message.ragMetadata?.generation);
+const failureHeading = (message: any) => recoverableFile(message) ? '文件尚未完成' : message.failure.cancelled ? '已停止生成' : '回答未生成';
+const failureDescription = (message: any) => recoverableFile(message) ? '文件草稿已保存，可以继续完成。' : message.failure.message === '已停止生成' ? '' : message.failure.message;
 const retryFailedAnswer = async (message: any) => {
   if (currentSendLocked() || chatStore.isStreaming || uploadingFiles.value || message.conversationId !== chatStore.currentConversation?.id) return;
+  if (recoverableFile(message)) { await continueAnswer(message); return; }
   const attempt = chatStore.failedAttempts[message.conversationId];
   if (!attempt || attempt.reply.id !== message.id || !attempt.reply.failure?.retryable) return;
   const text = attempt.question.content, files: ChatFile[] = attempt.question.ragMetadata?.messageAttachments || [];
@@ -795,27 +801,42 @@ const retryFailedAnswer = async (message: any) => {
   }
   inputText.value = text;
   chatStore.draftAttachments[message.conversationId] = files.map(file => ({ ...file }));
-  await handleSendMessage();
+  const resumeFile = readFileResume(attempt.question.ragMetadata?.resumeFile);
+  if (attempt.question.ragMetadata?.resumeFile && !resumeFile) { ElMessage.info('文件草稿信息无效，请刷新对话后重试'); return; }
+  await handleSendMessage(resumeFile);
 };
 const continueAnswer = async (message: any) => {
-  if (chatStore.isStreaming || !isAssistant.value || inputText.value.trim() || pendingFiles.value.length) {
+  if (currentSendLocked() || uploadingFiles.value) return;
+  const generation = message.ragMetadata?.generation;
+  const resumeFile = generation?.fileIncomplete ? readFileResume(generation.resumeFile) : undefined;
+  const failed = chatStore.failedAttempts[message.conversationId];
+  const restoredFailureDraft = resumeFile && message.failure && failed?.reply.id === message.id &&
+    (!inputText.value.trim() || inputText.value.trim() === failed.question.content.trim()) &&
+    sameDraftFiles(pendingFiles.value, failed.question.ragMetadata?.messageAttachments || []);
+  if (chatStore.isStreaming || !isAssistant.value || (inputText.value.trim() || pendingFiles.value.length) && !restoredFailureDraft) {
     if (!chatStore.isStreaming) ElMessage.info('请先发送或清空当前草稿，再继续生成');
     return;
   }
-  const generation = message.ragMetadata?.generation;
   if (!generation?.truncated || !generation?.canContinue) return;
+  if (message.conversationId !== chatStore.currentConversation?.id) return;
   const answers = chatStore.messages.filter(m => m.role === 'assistant');
-  if (answers[answers.length - 1]?.id !== message.id) {
+  if (!resumeFile && answers[answers.length - 1]?.id !== message.id) {
     ElMessage.info('请在输入框说明要续写哪条回答'); return;
   }
-  inputText.value = generation.fileIncomplete
+  if (restoredFailureDraft) chatStore.draftAttachments[message.conversationId] = [];
+  inputText.value = resumeFile ? '继续完成文件' : generation.fileIncomplete
     ? '请根据原需求，重新生成一个完整、精简的可下载文件。'
     : '请继续上一条回答，从中断处接着写，不要重复已经输出的内容。';
-  await handleSendMessage();
+  await handleSendMessage(resumeFile);
 };
-const handleSendMessage = async () => {
+const handleSendMessage = async (resumeInput?: unknown) => {
+  let resumeFile = readFileResume(resumeInput);
   if (currentSendLocked() || uploadingFiles.value || chatStore.isStreaming || isLegacy.value) return;
   const text = inputText.value.trim();
+  // A restored resume action keeps its pointer when sent again from the composer.
+  const priorAttempt = chatStore.currentConversation && chatStore.failedAttempts[chatStore.currentConversation.id];
+  if (!resumeFile && !pendingFiles.value.length && text === priorAttempt?.question.content)
+    resumeFile = readFileResume(priorAttempt?.question.ragMetadata?.resumeFile);
   if (!text && !pendingFiles.value.length) return;
   if (!selectedModel.value?.available) { ElMessage.warning('请选择可用模型'); return; }
   if (katoKnowledgeDefaultPending.value) {
@@ -869,7 +890,7 @@ const handleSendMessage = async () => {
       {files:sendingFiles,onAccepted:()=>{
         if(ownsSendingSession()&&sendingConversationId&&sameDraftFiles(chatStore.draftAttachments[sendingConversationId]||[],sendingFiles))
           chatStore.draftAttachments[sendingConversationId]=[];
-      }});
+      }},resumeFile);
     if(!completed)restoreDraft();
   } catch (e: any) {
     restoreDraft();

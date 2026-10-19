@@ -3,7 +3,7 @@
     <details v-if="view.phases.length" class="generation-process" :class="{ 'is-pending': pending }">
       <summary aria-label="处理过程">
         <span class="process-indicator" aria-hidden="true"></span>
-        <span class="process-current">{{ view.label }}</span>
+        <span class="process-current">{{ statusLabel }}</span>
         <span v-if="view.elapsedMs !== null" class="process-elapsed">总用时 {{ seconds(view.elapsedMs) }} 秒</span>
         <span class="process-chevron" aria-hidden="true">⌄</span>
       </summary>
@@ -23,20 +23,25 @@
     </details>
     <span v-else class="process-compact" :class="{ 'is-pending': pending }">
       <span class="process-indicator" aria-hidden="true"></span>
-      <span class="process-current">{{ view.label }}</span>
+      <span class="process-current">{{ statusLabel }}</span>
       <span v-if="view.elapsedMs !== null" class="process-elapsed">总用时 {{ seconds(view.elapsedMs) }} 秒</span>
     </span>
     <span v-if="pending" class="process-announcement" role="status">{{ view.label }}</span>
     <button v-if="!pending && generation?.truncated && generation?.canContinue" class="continue-generation" :disabled="busy" @click="$emit('continue')">{{ continuationLabel }}</button>
+    <p v-if="!pending && generation?.fileIncomplete && !resumeFile" class="file-resume-unavailable">此回答未保留草稿，无法接着完成。</p>
   </div>
 </template>
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import type { GenerationProgress } from '@/utils/chat-stream';
 import { generationProcessView, generationSeconds as seconds } from '@/utils/generation-process';
+import { readFileResume, type FileResumePointer, type FileFailureReason } from '@/utils/file-resume';
 const props = defineProps<{ pending?: boolean; busy?: boolean; progress?: GenerationProgress;
-  generation?: {truncated: boolean; canContinue: boolean; fileIncomplete?: boolean; filePaths?: string[]}; allowThinking?: boolean }>();
-const continuationLabel = computed(() => props.generation?.fileIncomplete ? '重新生成文件' : '继续生成');
+  generation?: {truncated: boolean; canContinue: boolean; fileIncomplete?: boolean; filePaths?: string[];
+    fileFailureReason?: FileFailureReason; resumeFile?: FileResumePointer}; allowThinking?: boolean }>();
+const resumeFile = computed(() => readFileResume(props.generation?.resumeFile));
+const continuationLabel = computed(() => props.generation?.fileIncomplete ? resumeFile.value ? '继续完成文件' : '重新生成文件' : '继续生成');
+const statusLabel = computed(() => !props.pending && props.generation?.fileIncomplete ? '文件未完成' : view.value.label);
 defineEmits<{ continue: [] }>();
 const sampledAt = ref(Date.now()), now = ref(sampledAt.value), frozenExtension = ref(0);
 let mounted = false, timer: ReturnType<typeof setInterval> | undefined;
@@ -90,6 +95,7 @@ onUnmounted(() => { mounted = false; stopClock(); });
 .process-announcement { position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0; }
 .continue-generation { border:1px solid #cbd7e8;border-radius:14px;background:#fff;padding:3px 11px;min-height:32px;color:#3b638e;cursor:pointer; }
 .continue-generation:disabled { opacity:.5;cursor:default; }
+.file-resume-unavailable { flex-basis:100%;margin:0;color:#7b8b9d;font-size:12px;line-height:1.6; }
 @keyframes process-pulse { 50% { opacity:.35; } }
 @media (max-width:900px) {
   .generation-process summary { min-height:36px; }

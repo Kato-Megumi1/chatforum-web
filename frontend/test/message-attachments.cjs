@@ -22,6 +22,10 @@ const recoveryModule={exports:{}};
 new Function('module','exports',ts.transpileModule(readFileSync(join(__dirname,'../src/utils/chat-draft-recovery.ts'),'utf8'),{
  compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(recoveryModule,recoveryModule.exports);
 const {recoverChatDraft,sameDraftFiles,sameDraftSession}=recoveryModule.exports;
+const fileResumeModule={exports:{}};
+new Function('module','exports',ts.transpileModule(readFileSync(join(__dirname,'../src/utils/file-resume.ts'),'utf8'),{
+ compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(fileResumeModule,fileResumeModule.exports);
+const resumePointer={draftId:'39411c9b-62be-44da-b3bc-1eac374f3925',revision:2,hash:'a'.repeat(64)};
 const roleplayDefaultsModule={exports:{}};
 new Function('module','exports',ts.transpileModule(readFileSync(join(__dirname,'../src/utils/roleplay-defaults.ts'),'utf8'),{
  compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(roleplayDefaultsModule,roleplayDefaultsModule.exports);
@@ -100,11 +104,11 @@ function chatRecoveryFixture({acceptImmediately=true,knowledgeBaseId=0,perConver
    '@/stores/chat':{useChatStore:()=>store},'@/stores/user':{useUserStore:()=>user},'@/utils/request':request,
    '@/utils/api':{publicAsset:path=>path,CONNECTION_SETTINGS_ENABLED:false},'@/utils/chat-navigation':navigationModule.exports,
    '@/utils/chat-draft-recovery':recoveryModule.exports,'@/utils/chat-files':load(request),
-   '@/utils/roleplay-defaults':roleplayDefaultsModule.exports,
+   '@/utils/roleplay-defaults':roleplayDefaultsModule.exports,'@/utils/file-resume':fileResumeModule.exports,
    '@/utils/forum-links':{},marked:{marked:{}},dompurify:{},dayjs:()=>({format:()=>''}),
   };
   const script=readFileSync(join(__dirname,'../src/views/Chat.vue'),'utf8').match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1];
-  const code=ts.transpileModule(script+'\nexport {handleSendMessage,retryFailedAnswer,continueAnswer,inputText};',{
+  const code=ts.transpileModule(script+'\nexport {handleSendMessage,retryFailedAnswer,continueAnswer,inputText,uploadingFiles,sendingLocks,failureHeading,failureDescription};',{
    compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;
   const mod={exports:{}};
   scope.run(()=>new Function('require','module','exports','window',code)(name=>{
@@ -197,7 +201,7 @@ test('Chat.vue allows a second conversation to send while the first view handler
 test('incomplete file delivery requires a user-triggered full regeneration request instead of appending broken code',async()=>{
  for(const fileIncomplete of [true,false]){
   const f=chatRecoveryFixture(),active=f.view();await active.mount();f.store.draftAttachments[11]=[];
-  const message={id:200,role:'assistant',content:'Previous output',ragMetadata:{generation:{truncated:true,canContinue:true,fileIncomplete,filePaths:['demo.html']}}};
+  const message={id:200,conversationId:11,role:'assistant',content:'Previous output',ragMetadata:{generation:{truncated:true,canContinue:true,fileIncomplete,filePaths:['demo.html']}}};
   f.store.messages=[message];assert.equal(f.sentArguments(),undefined,'Showing a continuation action must not start a task');
   const continuing=active.continueAnswer(message);await tick();
   assert.equal(f.sentCalls.length,1);
@@ -208,14 +212,108 @@ test('incomplete file delivery requires a user-triggered full regeneration reque
 
 test('file regeneration cannot replace a newer draft and is unavailable to roleplay or a non-continuable answer',async()=>{
  const f=chatRecoveryFixture(),active=f.view();await active.mount();f.store.draftAttachments[11]=[];
- const message={id:200,role:'assistant',content:'Previous output',ragMetadata:{generation:{truncated:true,canContinue:true,fileIncomplete:true}}};f.store.messages=[message];
+ const message={id:200,conversationId:11,role:'assistant',content:'Previous output',ragMetadata:{generation:{truncated:true,canContinue:true,fileIncomplete:true}}};f.store.messages=[message];
  active.inputText.value='Keep my newer draft';await active.continueAnswer(message);assert.equal(f.sentCalls.length,0);assert.equal(active.inputText.value,'Keep my newer draft');
  active.inputText.value='';message.ragMetadata.generation.canContinue=false;await active.continueAnswer(message);assert.equal(f.sentCalls.length,0);
  message.ragMetadata.generation.canContinue=true;f.store.currentConversation={...draftConversation(),conversationType:'ROLEPLAY',personaKey:'kato_megumi_persona'};await tick();
  await active.continueAnswer(message);assert.equal(f.sentCalls.length,0);active.unmount();
 });
 
-function durableStoreFixture({createWait}={}){
+test('explicit versioned file resume can target an older current-conversation answer without prose regeneration',async()=>{
+ const f=chatRecoveryFixture(),active=f.view();await active.mount();f.store.draftAttachments[11]=[];
+ const earlier={id:190,conversationId:11,role:'assistant',content:'Partial file',ragMetadata:{generation:{truncated:true,canContinue:true,fileIncomplete:true,resumeFile:resumePointer}}};
+ f.store.messages=[earlier,{id:200,conversationId:11,role:'assistant',content:'A later answer'}];
+ assert.equal(f.sentCalls.length,0);const operation=active.continueAnswer(earlier);await tick();
+ assert.equal(f.sentCalls.length,1);assert.equal(f.sentArguments()[0],'继续完成文件');assert.deepEqual(f.sentArguments()[9],resumePointer);
+ assert(!f.sentArguments()[0].includes('重新生成'));f.run.resolve(true);await operation;active.unmount();
+});
+
+test('file resume pointer survives a failed attempt retry and restored composer submission',async()=>{
+ for(const trigger of ['retry','composer']){
+  const f=chatRecoveryFixture(),active=f.view();await active.mount();f.store.draftAttachments[11]=[];
+  const message={id:-2,conversationId:11,failure:{retryable:true}};
+  f.store.failedAttempts[11]={question:{content:'继续完成文件',ragMetadata:{resumeFile:resumePointer}},reply:message};
+  active.inputText.value='继续完成文件';const operation=trigger==='retry'?active.retryFailedAnswer(message):active.handleSendMessage();await tick();
+  assert.equal(f.sentCalls.length,1);assert.equal(f.sentArguments()[0],'继续完成文件');assert.deepEqual(f.sentArguments()[9],resumePointer);
+  f.run.resolve(true);await operation;active.unmount();
+ }
+});
+
+test('resume action rejects another conversation and preserves a newer draft while ordinary continuation stays latest-only',async()=>{
+ const f=chatRecoveryFixture(),active=f.view();await active.mount();f.store.draftAttachments[11]=[];
+ const message={id:190,conversationId:12,role:'assistant',content:'Partial file',ragMetadata:{generation:{truncated:true,canContinue:true,fileIncomplete:true,resumeFile:resumePointer}}};
+ f.store.messages=[message];await active.continueAnswer(message);assert.equal(f.sentCalls.length,0);
+ message.conversationId=11;active.inputText.value='Keep my newer draft';await active.continueAnswer(message);assert.equal(f.sentCalls.length,0);assert.equal(active.inputText.value,'Keep my newer draft');
+ active.inputText.value='';delete message.ragMetadata.generation.resumeFile;message.ragMetadata.generation.fileIncomplete=false;
+ f.store.messages.push({id:200,conversationId:11,role:'assistant',content:'Latest answer'});await active.continueAnswer(message);
+ assert.equal(f.sentCalls.length,0);active.unmount();
+});
+
+test('resume protocol permits only immutable identifier, positive revision and lowercase hash',()=>{
+ const read=fileResumeModule.exports.readFileResume;
+ assert.deepEqual(read({...resumePointer,source:'SECRET_SOURCE',originalQuestion:'SECRET_TASK'}),resumePointer);
+ for(const value of [null,[],{...resumePointer,draftId:'not-a-uuid'},{...resumePointer,revision:0},{...resumePointer,revision:1.1},
+  {...resumePointer,revision:Number.MAX_SAFE_INTEGER+1},{...resumePointer,hash:'A'.repeat(64)},{...resumePointer,hash:'a'.repeat(63)}])assert.equal(read(value),undefined);
+});
+
+test('failed-file recovery metadata keeps only a valid public generation projection',()=>{
+ const read=fileResumeModule.exports.readRecoverableFileGeneration;
+ const generation={fileIncomplete:true,truncated:true,canContinue:true,fileFailureReason:'SERVICE_ERROR',resumeFile:resumePointer};
+ assert.deepEqual(read({...generation,privatePrefix:'SECRET_CODE',source:'SECRET_SOURCE'}),generation);
+ for(const value of [{...generation,resumeFile:{...resumePointer,hash:'bad'}},{...generation,fileIncomplete:false},{...generation,truncated:false},
+  {...generation,canContinue:false},null])assert.equal(read(value),undefined);
+ assert.equal(read({...generation,fileFailureReason:'SECRET_REASON'}).fileFailureReason,undefined);
+});
+
+test('recoverable file failure copy matches its resume action while ordinary, cancelled and roleplay errors stay unchanged',async()=>{
+ const f=chatRecoveryFixture(),active=f.view();await active.mount();
+ const message={failure:{message:'模型等待超时，请重新发送。',cancelled:false},
+  ragMetadata:{generation:{fileIncomplete:true,truncated:true,canContinue:true,resumeFile:resumePointer}}};
+ assert.equal(active.failureHeading(message),'文件尚未完成');assert.equal(active.failureDescription(message),'文件草稿已保存，可以继续完成。');
+ const invalid={...message,ragMetadata:{generation:{...message.ragMetadata.generation,resumeFile:{...resumePointer,hash:'invalid'}}}};
+ assert.equal(active.failureHeading(invalid),'回答未生成');assert.equal(active.failureDescription(invalid),message.failure.message);
+ const cancelled={failure:{message:'已停止生成',cancelled:true}};
+ assert.equal(active.failureHeading(cancelled),'已停止生成');assert.equal(active.failureDescription(cancelled),'');
+ f.store.currentConversation={...f.store.currentConversation,conversationType:'ROLEPLAY'};
+ assert.equal(active.failureHeading(message),'回答未生成');assert.equal(active.failureDescription(message),message.failure.message);active.unmount();
+});
+
+test('service-failed answer resumes the new server draft instead of resending its original question or old pointer',async()=>{
+ for(const trigger of ['continue','retry']){
+  const f=chatRecoveryFixture(),active=f.view();await active.mount();
+  const newer={...resumePointer,revision:3,hash:'b'.repeat(64)};
+  const message={id:-2,conversationId:11,role:'assistant',failure:{retryable:true},
+   ragMetadata:{generation:{fileIncomplete:true,truncated:true,canContinue:true,fileFailureReason:'SERVICE_ERROR',resumeFile:newer}}};
+  const question={content:'The original full task',ragMetadata:{resumeFile:resumePointer,messageAttachments:[attachment]}};
+  f.store.failedAttempts[11]={question,reply:message};f.store.messages=[message];active.inputText.value=question.content;
+  const operation=trigger==='continue'?active.continueAnswer(message):active.retryFailedAnswer(message);await tick();
+  assert.equal(f.sentCalls.length,1);assert.equal(f.sentArguments()[0],'继续完成文件');assert.deepEqual(f.sentArguments()[9],newer);
+  assert.deepEqual(f.sentArguments()[8].files,[],'Recovered original attachments cannot become fresh resume inputs');
+  f.run.resolve(true);await operation;active.unmount();
+ }
+});
+
+test('service-failed draft resume preserves a newer user draft and attachment choice',async()=>{
+ const f=chatRecoveryFixture(),active=f.view();await active.mount();
+ const message={id:-2,conversationId:11,role:'assistant',failure:{retryable:true},ragMetadata:{generation:{fileIncomplete:true,truncated:true,canContinue:true,resumeFile:resumePointer}}};
+ f.store.failedAttempts[11]={question:{content:'Original task',ragMetadata:{messageAttachments:[attachment]}},reply:message};f.store.messages=[message];
+ active.inputText.value='A newer task';await active.continueAnswer(message);assert.equal(f.sentCalls.length,0);assert.equal(active.inputText.value,'A newer task');
+ active.inputText.value='Original task';f.store.draftAttachments[11]=[{...attachment,revision:2}];await active.continueAnswer(message);
+ assert.equal(f.sentCalls.length,0);assert.equal(f.store.draftAttachments[11][0].revision,2);active.unmount();
+});
+
+test('failed-file resume cannot mutate its restored draft during upload or same-conversation admission',async()=>{
+ for(const blocked of ['upload','admission']){
+  const f=chatRecoveryFixture(),active=f.view();await active.mount();
+  const message={id:-2,conversationId:11,role:'assistant',failure:{retryable:true},ragMetadata:{generation:{fileIncomplete:true,truncated:true,canContinue:true,resumeFile:resumePointer}}};
+  f.store.failedAttempts[11]={question:{content:'Original task',ragMetadata:{messageAttachments:[attachment]}},reply:message};f.store.messages=[message];active.inputText.value='Original task';
+  if(blocked==='upload')active.uploadingFiles.value=true;else active.sendingLocks.add(11);
+  await active.continueAnswer(message);assert.equal(f.sentCalls.length,0);assert.equal(active.inputText.value,'Original task');
+  assert.deepEqual(f.store.draftAttachments[11],[attachment]);active.unmount();
+ }
+});
+
+function durableStoreFixture({createWait,admitError}={}){
  const persisted=[],requests=[],waiters=[],saved=new Map();let runNumber=0,recoveredState={status:'RUNNING'};
  const original=draftConversation(),other=draftConversation(12);
  const request={get:async path=>{
@@ -225,6 +323,7 @@ function durableStoreFixture({createWait}={}){
   return saved.get(Number(path.split('/')[3]))||[];
  },post:async(path,input)=>{requests.push(['post',path,input]);
   if(path==='/chat/conversations')return createWait?createWait.promise:draftConversation(13);
+  if(admitError)throw admitError;
   return{id:'run-'+(++runNumber),status:'RUNNING'};},delete:async path=>requests.push(['delete',path])};
  const storage={getItem:()=>null,setItem:(...args)=>persisted.push(args),removeItem(){}};
  const navigationModule={exports:{}};
@@ -234,7 +333,7 @@ function durableStoreFixture({createWait}={}){
   '@/utils/chat-stream':{watchChatRun:(id,signal,onDelta,onProgress)=>{const wait=deferred();waiters.push({...wait,id,signal,onDelta,onProgress});return wait.promise;}},
   '@/utils/local-workspace':{disconnectLocalWorkspace(){}},'@/utils/chat-navigation':navigationModule.exports,
   '@/utils/chat-files':load(request),'@/utils/chat-model-selection':{selectedChatModel:()=> 'fixture-model'},
-  '@/utils/roleplay-defaults':roleplayDefaultsModule.exports};
+  '@/utils/roleplay-defaults':roleplayDefaultsModule.exports,'@/utils/file-resume':fileResumeModule.exports};
  const mod={exports:{}},code=ts.transpileModule(readFileSync(join(__dirname,'../src/stores/chat.ts'),'utf8'),{
   compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;
  new Function('require','module','exports','localStorage','sessionStorage',code)(name=>{
@@ -357,4 +456,51 @@ test('creating a new conversation cannot redirect an in-flight send into a subse
  assert.equal(f.store.currentConversation.id,12);assert.deepEqual(f.store.messages.map(message=>message.content),['Existing conversation B','']);
  assert.deepEqual(f.requests.filter(([method,path])=>method==='post'&&path==='/chat/runs').map(([, ,input])=>input.conversationId),[12,13]);
  assert.equal(f.waiters.length,2);f.store.resetForUser();f.waiters.forEach(wait=>wait.resolve({status:'CANCELLED'}));await Promise.all([created,existing]);
+});
+
+test('real store sends a resume pointer separately, renders the action name and retains it on a failed local question',async()=>{
+ const f=durableStoreFixture(),operation=f.store.sendConfigured('','normal',[],undefined,undefined,undefined,undefined,undefined,{files:[]},
+  {...resumePointer,source:'SECRET_DRAFT_SOURCE',originalQuestion:'SECRET_ORIGINAL_TASK'});await tick();
+ const input=f.requests.find(([method,path])=>method==='post'&&path==='/chat/runs')[2];
+ assert.equal(input.question,'继续完成文件');assert.deepEqual(input.resumeFile,resumePointer);assert(!JSON.stringify(input).includes('SECRET_'));
+ assert.equal(f.store.messages[0].content,'继续完成文件');assert.deepEqual(f.store.messages[0].ragMetadata.resumeFile,resumePointer);
+ f.waiters[0].resolve({status:'FAILED',error:'Synthetic interrupted resume'});assert.equal(await operation,false);
+ assert.deepEqual(f.store.failedAttempts[11].question.ragMetadata.resumeFile,resumePointer);
+ assert.equal(f.requests.filter(([method,path])=>method==='post'&&path==='/chat/runs').length,1,'Failure does not automatically buy another task');
+});
+
+test('outdated draft conflict does not auto-retry or replace the version pointer',async()=>{
+ const f=durableStoreFixture({admitError:Object.assign(Error('草稿版本已更新，请刷新后继续'),{response:{status:409}})});
+ assert.equal(await f.store.sendConfigured('继续完成文件','normal',[],undefined,undefined,undefined,undefined,undefined,{files:[]},resumePointer),false);
+ assert.equal(f.waiters.length,0);assert.equal(f.requests.filter(([method,path])=>method==='post'&&path==='/chat/runs').length,1);
+ assert.deepEqual(f.store.failedAttempts[11].question.ragMetadata.resumeFile,resumePointer);
+ assert.match(f.store.failedAttempts[11].reply.failure.message,/草稿版本已更新/);
+});
+
+test('store refuses malformed or roleplay resume input before submitting a model task',async()=>{
+ const f=durableStoreFixture();await assert.rejects(f.store.sendConfigured('继续完成文件','normal',[],undefined,undefined,undefined,undefined,undefined,{files:[]},{...resumePointer,hash:'BAD'}),/草稿信息无效/);
+ f.store.currentConversation={...f.original,conversationType:'ROLEPLAY'};
+ await assert.rejects(f.store.sendConfigured('继续完成文件','normal',[],undefined,undefined,undefined,undefined,undefined,{files:[]},resumePointer),/原普通 AI 会话/);
+ assert.equal(f.requests.filter(([method])=>method==='post').length,0);
+});
+
+test('terminal service failure preserves the server-created draft separately from the original question',async()=>{
+ const f=durableStoreFixture(),operation=f.store.sendMessage('The original full task');await tick();
+ const generation={fileIncomplete:true,truncated:true,canContinue:true,fileFailureReason:'SERVICE_ERROR',resumeFile:resumePointer};
+ f.waiters[0].resolve({status:'FAILED',result:{failure:{code:'MODEL_CONNECTION_FAILED',message:'Synthetic connection failure'},
+  ragMetadata:{generation:{...generation,privatePrefix:'SECRET_SOURCE'},raw:'SECRET_INTERNAL'}}});
+ assert.equal(await operation,false);
+ const attempt=f.store.failedAttempts[11];assert.equal(attempt.question.content,'The original full task');assert.equal(attempt.question.ragMetadata?.resumeFile,undefined);
+ assert.deepEqual(attempt.reply.ragMetadata.generation,generation);assert(!JSON.stringify(attempt.reply).includes('SECRET_'));
+ assert.equal(f.requests.filter(([method,path])=>method==='post'&&path==='/chat/runs').length,1);
+});
+
+test('reading failed durable state after a broken connection also retains its public recovery pointer',async()=>{
+ const f=durableStoreFixture(),operation=f.store.sendMessage('Interrupted original task');await tick();
+ const generation={fileIncomplete:true,truncated:true,canContinue:true,fileFailureReason:'SERVICE_ERROR',resumeFile:resumePointer};
+ f.setState({status:'FAILED',error:'Synthetic failure',result:{ragMetadata:{generation}}});f.waiters[0].reject(Error('SSE disconnected'));
+ assert.equal(await operation,false);assert.deepEqual(f.store.failedAttempts[11].reply.ragMetadata.generation,generation);
+ const g=durableStoreFixture(),later=g.store.sendMessage('Unknown original task');await tick();g.waiters[0].reject(Error('SSE disconnected'));await later;
+ g.setState({status:'FAILED',error:'Synthetic failure',result:{ragMetadata:{generation}}});await g.store.selectConversation(g.other);await g.store.selectConversation(g.original);
+ assert.deepEqual(g.store.failedAttempts[11].reply.ragMetadata.generation,generation);
 });

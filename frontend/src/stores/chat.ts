@@ -7,6 +7,7 @@ import { CHAT_NAVIGATION_KEY, emptyChatNavigation, readChatNavigation, type Chat
 import { chatFileRef, type ChatFile } from '@/utils/chat-files';
 import { selectedChatModel } from '@/utils/chat-model-selection';
 import { conversationResponseOptions, ensureConversationSettings, type ConversationSettings } from '@/utils/roleplay-defaults';
+import { readFileResume, readRecoverableFileGeneration, type FileResumePointer } from '@/utils/file-resume';
 
 interface Conversation { id: number; title: string; isPinned: boolean; userId: number; createdAt: string; updatedAt: string;
   conversationType: 'ASSISTANT' | 'ROLEPLAY' | 'LEGACY'; personaKey?: string; personaLabel?: string;
@@ -21,6 +22,10 @@ interface ChatModel { id: string; label: string; available: boolean; unavailable
 interface Run { id?: string; status: string; error?: string; result?: { content?: string; ragMetadata?: any;
   failure?: { code?: string; message?: string } } }
 const failureMessageFor = (run: Run) => run.result?.failure?.message || run.error || '本次回答未生成，请重新发送';
+const retainFailedFileRecovery = (reply: Message | undefined, run: Run) => {
+  const generation = readRecoverableFileGeneration(run.result?.ragMetadata?.generation);
+  if (reply && generation) reply.ragMetadata = { ...reply.ragMetadata, generation };
+};
 
 // Drop provider secrets written by older app versions, without dropping role settings.
 try {
@@ -126,6 +131,7 @@ export const useChatStore = defineStore('chat', () => {
             delete failedAttempts.value[conversation.id];
             data = await request.get<Message[]>('/chat/conversations/' + conversation.id + '/messages');
           } else if (state.status === 'FAILED' || state.status === 'CANCELLED') {
+            retainFailedFileRecovery(failed.reply, state);
             failed.reply.failure.cancelled = state.status === 'CANCELLED';
             failed.reply.failure.retryable = true;
             failed.reply.failure.message = state.status === 'CANCELLED' ? '已停止生成' : failureMessageFor(state);
@@ -184,10 +190,14 @@ export const useChatStore = defineStore('chat', () => {
 
   const send = async (question: string, mode: 'normal' | 'agent', enabledSkills?: string[],
     persona?: string, customSystemPrompt?: string, knowledgeBaseId?: number, onStream?: (text: string) => void, codingWorkspaceId?: string,
-    attachments?:{files:ChatFile[];onAccepted?:()=>void}) => {
+    attachments?:{files:ChatFile[];onAccepted?:()=>void}, resumeInput?: FileResumePointer) => {
+    const resumeFile = readFileResume(resumeInput);
+    if (resumeInput !== undefined && !resumeFile) throw new Error('文件草稿信息无效，请刷新对话后重试');
     const initialConversation = currentConversation.value, initialSelection = selection;
     if ((initialConversation ? isConversationStreaming(initialConversation.id) : !!preparingRun.value) ||
-      (!question.trim()&&!attachments?.files.length)) return false;
+      (!question.trim()&&!attachments?.files.length&&!resumeFile)) return false;
+    if (resumeFile && initialConversation?.conversationType !== 'ASSISTANT') throw new Error('请在原普通 AI 会话继续完成文件');
+    const visibleQuestion = resumeFile ? '继续完成文件' : question;
     let completed=false;
     const controller = new AbortController();
     const sendingEpoch = identityEpoch, startedAt = Date.now();
@@ -214,9 +224,10 @@ export const useChatStore = defineStore('chat', () => {
       if (!ownsAttempt() || controller.signal.aborted) return false;
       cid = conversation.id;
       dismissFailedAttempt(cid);
-      runtime.question = { id: -Date.now(), role: 'user', content: question,
+      runtime.question = { id: -Date.now(), role: 'user', content: visibleQuestion,
         conversationId: cid, createdAt: new Date().toISOString(),
-        ...(attachments?.files.length?{ragMetadata:{messageAttachments:attachments.files}}:{}) };
+        ...(attachments?.files.length || resumeFile ? { ragMetadata: {
+          ...(attachments?.files.length ? { messageAttachments: attachments.files } : {}), ...(resumeFile ? { resumeFile } : {}) } } : {}) };
       const responseOptions = conversationResponseOptions(getConversationSettings(cid), conversation.conversationType);
       runtime.reply = { id: -Date.now() - 1, role: 'assistant', content: '', pending: true,
         conversationId: cid, createdAt: new Date().toISOString(), ragMetadata: { responseOptions } };
@@ -224,7 +235,8 @@ export const useChatStore = defineStore('chat', () => {
       if (currentConversation.value?.id === cid) messages.value.push(questionMessage, reply);
       // Admit once; subscribe/reconnect to the durable run without repeating model calls.
       const run = await request.post<Run>('/chat/runs', { requestId: crypto.randomUUID(),
-        conversationId: cid, question, mode, enabledSkills: enabledSkills?.filter(skill => skill !== 'web_search'),
+        conversationId: cid, question: visibleQuestion, mode, enabledSkills: enabledSkills?.filter(skill => skill !== 'web_search'),
+        ...(resumeFile ? { resumeFile } : {}),
         ...responseOptions, codingWorkspaceId, persona: persona || undefined,
         attachments:attachments?.files.length?attachments.files.map(chatFileRef):undefined,
         customSystemPrompt: customSystemPrompt || undefined, knowledgeBaseId: knowledgeBaseId || undefined,
@@ -242,6 +254,7 @@ export const useChatStore = defineStore('chat', () => {
         reply.content = status.result?.content || reply.content;
         reply.ragMetadata = status.result?.ragMetadata;
       } else {
+        retainFailedFileRecovery(reply, status);
         cancelled = status.status === 'CANCELLED';
         failureMessage = cancelled ? '已停止生成' : failureMessageFor(status);
       }
@@ -259,6 +272,7 @@ export const useChatStore = defineStore('chat', () => {
             completed = true; reply.content = state.result?.content || reply.content;
             reply.ragMetadata = state.result?.ragMetadata;
           } else if (state.status === 'FAILED' || state.status === 'CANCELLED') {
+            retainFailedFileRecovery(reply, state);
             cancelled = state.status === 'CANCELLED'; retryable = true;
             failureMessage = cancelled ? '已停止生成' : failureMessageFor(state);
           } else failureMessage = '连接已中断，回答可能仍在生成，请稍后重新打开对话查看';
