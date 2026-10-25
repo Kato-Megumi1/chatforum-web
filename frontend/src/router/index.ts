@@ -72,6 +72,18 @@ const routes: RouteRecordRaw[] = [
         meta: { requiresAuth: true },
       },
       {
+        path: 'user/memory',
+        name: 'MyMemory',
+        component: () => import('@/views/MyMemory.vue'),
+        meta: { requiresAuth: true },
+      },
+      {
+        path: 'reports',
+        name: 'Reports',
+        component: () => import('@/views/Reports.vue'),
+        meta: { requiresAuth: true },
+      },
+      {
         path: 'user/:id',
         name: 'UserSpace',
         component: () => import('@/views/UserSpace.vue'),

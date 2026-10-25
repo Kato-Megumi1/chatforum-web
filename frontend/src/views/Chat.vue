@@ -153,10 +153,17 @@
         <div v-if="hasPersonaActive" class="roleplay-wallpaper" aria-hidden="true">
           <img src="@/assets/images/roleplay-megumi-background.jpg" alt="" draggable="false" />
         </div>
-      <div class="chat-messages" ref="messagesRef" @click="openForumPost">
+      <div class="chat-messages" :class="{'loading-history':loadingHistory}" ref="messagesRef" @click="openForumPost" @scroll.passive="loadEarlierOnScroll">
+          <div v-if="Number(route.query.messageId)>0 && Number(route.query.conversationId)===chatStore.currentConversation?.id" class="history-pagination">
+            <el-button text size="small" :loading="chatStore.isLoadingConversation" @click="showLatestMessages">回到最新消息</el-button>
+          </div>
+          <div v-if="chatStore.hasOlderMessages" class="history-pagination">
+            <el-button text size="small" :loading="loadingHistory" @click="loadEarlierMessages">{{ historyLoadError ? '加载失败，重试' : '加载更早消息' }}</el-button>
+          </div>
           <div
             v-for="(msg, idx) in chatStore.messages"
             :key="msg.id || idx"
+            :data-message-id="msg.id"
             class="chat-message"
             :class="msg.role"
           >
@@ -183,7 +190,8 @@
                 </div>
               </div>
               <div v-else-if="msg.content || msg.role!=='user'" class="message-bubble" :class="[msg.role, { 'thinking-bubble': msg.pending && !msg.content }]">
-                <span v-if="msg.pending && !msg.content" class="typing-indicator" role="status" aria-label="正在思考"><span></span><span></span><span></span></span>
+                <span v-if="msg.waitingApproval" class="approval-waiting" role="status">等待操作确认</span>
+                <span v-else-if="msg.pending && !msg.content" class="typing-indicator" role="status" aria-label="正在思考"><span></span><span></span><span></span></span>
                 <template v-else>
                 <div v-if="hasToolResults(msg.content)" class="tool-results">
                   <div v-for="(result, idx) in getToolResults(msg.content)" :key="idx" class="tool-result-item">
@@ -201,7 +209,9 @@
                 <FileArtifacts v-if="isAssistant" :conversation-id="chatStore.currentConversation!.id" :artifacts="msg.ragMetadata?.fileArtifacts" />
                 </template>
               </div>
-              <GenerationStatus v-if="msg.role === 'assistant' && !msg.failure" :pending="msg.pending" :busy="chatStore.isStreaming"
+              <ToolApprovals v-if="isAssistant && msg.waitingApproval" :conversation-id="msg.conversationId"
+                :revision="chatStore.approvalRevision" @changed="chatStore.onToolApprovalChanged" />
+              <GenerationStatus v-if="msg.role === 'assistant' && !msg.failure && !msg.waitingApproval" :pending="msg.pending" :busy="chatStore.isStreaming"
                 :progress="msg.ragMetadata?.performance" :generation="isAssistant ? msg.ragMetadata?.generation : undefined"
                 :allow-thinking="isAssistant" @continue="continueAnswer(msg)" />
               <div
@@ -337,6 +347,7 @@ import CodeWorkspace from '@/components/CodeWorkspace.vue';
 import FileArtifacts from '@/components/FileArtifacts.vue';
 import MessageAttachments from '@/components/MessageAttachments.vue';
 import GenerationStatus from '@/components/GenerationStatus.vue';
+import ToolApprovals from '@/components/ToolApprovals.vue';
 import { uploadChatFiles, chatFileKey, type ChatFile } from '@/utils/chat-files';
 import { recoverChatDraft, sameDraftFiles, sameDraftSession } from '@/utils/chat-draft-recovery';
 import { conversationResponseOptions, defaultKatoKnowledgeBaseId } from '@/utils/roleplay-defaults';
@@ -362,6 +373,7 @@ let viewActive = true, initializing = true, restoring = true;
 const ownsView = () => viewActive && userStore.user?.id === ownerId && chatStore.navigation.userId === ownerId;
 const messagesRef = ref<HTMLElement>();
 const scrollAnchor = ref<HTMLElement>();
+const loadingHistory=ref(false),historyLoadError=ref(false);
 const inputText = ref('');
 const messagePlaceholder = '输入消息…';
 const showSettings = ref(false);
@@ -657,6 +669,38 @@ const scrollToBottom = () => {
   });
 };
 
+const loadEarlierMessages=async()=>{
+  const container=messagesRef.value,cid=chatStore.currentConversation?.id;
+  if(!ownsView()||!container||!cid||loadingHistory.value||!chatStore.hasOlderMessages)return;
+  const height=container.scrollHeight,top=container.scrollTop;loadingHistory.value=true;historyLoadError.value=false;
+  try{
+    await chatStore.loadOlderMessages();await nextTick();
+    if(ownsView()&&cid===chatStore.currentConversation?.id)container.scrollTop=top+container.scrollHeight-height;
+  }catch{if(ownsView()&&cid===chatStore.currentConversation?.id)historyLoadError.value=true;}finally{loadingHistory.value=false;}
+};
+const loadEarlierOnScroll=()=>{
+  if(!initializing&&!restoring&&messagesRef.value&&messagesRef.value.scrollTop<48&&!historyLoadError.value)void loadEarlierMessages();
+};
+const focusSourceMessage=async(messageId:number)=>{
+  if(!ownsView()||!Number.isSafeInteger(messageId)||messageId<1)return;
+  if(!await chatStore.loadAroundMessage(messageId))return;
+  await nextTick();
+  const container=messagesRef.value,target=container?.querySelector<HTMLElement>(`[data-message-id="${messageId}"]`);
+  if(container&&target)container.scrollTo({top:container.scrollTop+target.getBoundingClientRect().top-
+    container.getBoundingClientRect().top-(container.clientHeight-target.clientHeight)/2,behavior:'instant'});
+};
+const showLatestMessages=async()=>{
+  const conversation=chatStore.currentConversation;
+  if(!ownsView()||!conversation||chatStore.isLoadingConversation)return;
+  try{
+    await chatStore.selectConversation(conversation);await nextTick();
+    if(ownsView()&&chatStore.currentConversation?.id===conversation.id){
+      await router.replace({path:'/chat',query:{...route.query,messageId:undefined}});
+      messagesRef.value?.scrollTo({top:messagesRef.value.scrollHeight,behavior:'instant'});
+    }
+  }catch{if(ownsView())ElMessage.error('最新消息读取失败，请重试');}
+};
+
 // Restore navigation, not a new chat identity. Only IDs/positions go into tab-scoped storage.
 function saveView(id = chatStore.currentConversation?.id) {
   if (!ownsView() || initializing || restoring || !id || !messagesRef.value || !chatStore.conversations.some(c => c.id === id)) return;
@@ -794,7 +838,7 @@ const retryFailedAnswer = async (message: any) => {
   if (currentSendLocked() || chatStore.isStreaming || uploadingFiles.value || message.conversationId !== chatStore.currentConversation?.id) return;
   if (recoverableFile(message)) { await continueAnswer(message); return; }
   const attempt = chatStore.failedAttempts[message.conversationId];
-  if (!attempt || attempt.reply.id !== message.id || !attempt.reply.failure?.retryable) return;
+  if (!attempt?.question || attempt.reply.id !== message.id || !attempt.reply.failure?.retryable) return;
   const text = attempt.question.content, files: ChatFile[] = attempt.question.ragMetadata?.messageAttachments || [];
   if (inputText.value && inputText.value.trim() !== text || pendingFiles.value.length && !sameDraftFiles(pendingFiles.value, files)) {
     ElMessage.info('请先发送或清空当前草稿，再重新发送'); return;
@@ -811,8 +855,8 @@ const continueAnswer = async (message: any) => {
   const resumeFile = generation?.fileIncomplete ? readFileResume(generation.resumeFile) : undefined;
   const failed = chatStore.failedAttempts[message.conversationId];
   const restoredFailureDraft = resumeFile && message.failure && failed?.reply.id === message.id &&
-    (!inputText.value.trim() || inputText.value.trim() === failed.question.content.trim()) &&
-    sameDraftFiles(pendingFiles.value, failed.question.ragMetadata?.messageAttachments || []);
+    (!inputText.value.trim() || inputText.value.trim() === failed.question?.content.trim()) &&
+    sameDraftFiles(pendingFiles.value, failed.question?.ragMetadata?.messageAttachments || []);
   if (chatStore.isStreaming || !isAssistant.value || (inputText.value.trim() || pendingFiles.value.length) && !restoredFailureDraft) {
     if (!chatStore.isStreaming) ElMessage.info('请先发送或清空当前草稿，再继续生成');
     return;
@@ -835,8 +879,8 @@ const handleSendMessage = async (resumeInput?: unknown) => {
   const text = inputText.value.trim();
   // A restored resume action keeps its pointer when sent again from the composer.
   const priorAttempt = chatStore.currentConversation && chatStore.failedAttempts[chatStore.currentConversation.id];
-  if (!resumeFile && !pendingFiles.value.length && text === priorAttempt?.question.content)
-    resumeFile = readFileResume(priorAttempt?.question.ragMetadata?.resumeFile);
+  if (!resumeFile && !pendingFiles.value.length && text === priorAttempt?.question?.content)
+    resumeFile = readFileResume(priorAttempt?.question?.ragMetadata?.resumeFile);
   if (!text && !pendingFiles.value.length) return;
   if (!selectedModel.value?.available) { ElMessage.warning('请选择可用模型'); return; }
   if (katoKnowledgeDefaultPending.value) {
@@ -891,7 +935,7 @@ const handleSendMessage = async (resumeInput?: unknown) => {
         if(ownsSendingSession()&&sendingConversationId&&sameDraftFiles(chatStore.draftAttachments[sendingConversationId]||[],sendingFiles))
           chatStore.draftAttachments[sendingConversationId]=[];
       }},resumeFile);
-    if(!completed)restoreDraft();
+    if(!completed&&!(sendingConversationId&&chatStore.isConversationAwaitingApproval?.(sendingConversationId)))restoreDraft();
   } catch (e: any) {
     restoreDraft();
     if (ownsSendingSession() && ownsView() && chatStore.currentConversation?.id === sendingConversationId) ElMessage.error(e.message || '发送失败');
@@ -1016,7 +1060,7 @@ watch(
   () => chatStore.messages,
   () => {
     const container = messagesRef.value;
-    if (ownsView() && !initializing && !restoring && !chatStore.isLoadingConversation && container &&
+    if (ownsView() && !initializing && !restoring && !loadingHistory.value && !chatStore.isLoadingConversation && container &&
       container.scrollHeight - container.scrollTop - container.clientHeight < 100) scrollToBottom();
   },
   { deep: true }
@@ -1030,8 +1074,11 @@ onMounted(async () => {
     await chatStore.loadConversations();
     if (!ownsView()) return;
     const choice = initialChat(chatStore.conversations, chatStore.navigation);
-    activeSpace.value = choice.space;
-    if (choice.conversation) await chatStore.selectConversation(choice.conversation);
+    const requestedConversation=Number(route.query.conversationId),requestedMessage=Number(route.query.messageId);
+    const sourceConversation=chatStore.conversations.find(conversation=>conversation.id===requestedConversation);
+    activeSpace.value = sourceConversation?.conversationType || choice.space;
+    if(sourceConversation)await chatStore.selectConversation(sourceConversation,{around:requestedMessage>0?requestedMessage:undefined});
+    else if (choice.conversation) await chatStore.selectConversation(choice.conversation);
     else chatStore.clearSelection();
     if (!ownsView()) return;
     inputText.value = chatStore.currentConversation ? chatStore.drafts[chatStore.currentConversation.id] || '' : '';
@@ -1041,11 +1088,15 @@ onMounted(async () => {
       await router.replace({ path: '/chat', query: {} });
     }
   } catch (e: any) { if (ownsView()) ElMessage.error(e.message || '会话加载失败，请重试'); }
-  finally { if (ownsView()) { initializing = false; await restoreView(); } }
+  finally { if (ownsView()) { initializing = false; await restoreView();if(Number(route.query.messageId)>0)await focusSourceMessage(Number(route.query.messageId)); } }
 });
 </script>
 
 <style lang="scss" scoped>
+.history-pagination { display: flex; justify-content: center; padding: 4px 0 16px; }
+.chat-messages { overflow-anchor: none; }
+.chat-messages.loading-history { scroll-behavior: auto; }
+.approval-waiting { color: var(--el-text-color-secondary); font-size: 13px; }
 .conversation-spaces { display: flex; gap: 4px; padding: 4px; margin-bottom: 12px; background: #f1f4f8; border-radius: 10px; }
 .conversation-spaces button { flex: 1; min-width: 0; padding: 9px 3px; border: 0; border-radius: 7px; background: transparent; color: #677387; font: inherit; font-size: 13px; cursor: pointer; }
 .conversation-spaces button.active { background: white; color: #245da8; box-shadow: 0 1px 5px #142c4714; font-weight: 600; }

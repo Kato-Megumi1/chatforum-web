@@ -29,6 +29,7 @@
         <router-link v-if="post.isFavorited" class="my-favorites" to="/user/profile?activity=favorites">我的收藏</router-link>
         <el-button v-if="userStore.user" round :loading="tracking" :disabled="trackedPost === post.id" @click="trackPost">{{ trackedPost === post.id ? '已追踪更新' : '追踪帖子更新' }}</el-button>
         <el-button v-if="post.user.id === userStore.user?.id" round @click="$router.push('/forum/post/' + post.id + '/edit')">编辑帖子</el-button>
+        <el-button v-if="userStore.user && post.user.id !== userStore.user.id" link @click="openReport('POST',post.id)">举报</el-button>
       </div>
       <section class="discussion" :aria-labelledby="'post-discussion-' + post.id">
         <div class="discussion-heading"><h2 ref="discussionHeading" :id="'post-discussion-' + post.id" tabindex="-1">评论 <span>{{ post.commentCount }}</span></h2>
@@ -62,6 +63,7 @@
                 <el-button link :type="comment.isLiked ? 'primary' : 'info'" :disabled="busy.has('c' + comment.id)" @click="toggleComment(comment)">赞 {{ comment.likeCount || '' }}</el-button>
                 <el-button v-if="userStore.user" link :aria-expanded="replyTo === comment.id" :aria-controls="'reply-editor-' + comment.id" @click="beginReply(comment)">回复</el-button>
                 <el-button v-if="comment.canDelete" link type="danger" :disabled="busy.has('d' + comment.id)" @click="removeComment(comment)">删除</el-button>
+                <el-button v-if="userStore.user && comment.user.id !== userStore.user.id" link @click="openReport('COMMENT',comment.id)">举报</el-button>
               </div>
               <div v-if="!comment.contextOnly && replyTo === comment.id" :id="'reply-editor-' + comment.id" class="reply-composer" role="group" :aria-label="'回复 ' + comment.user.username">
                 <el-input v-model="replyText" type="textarea" :rows="2" maxlength="4000" show-word-limit :placeholder="'回复 ' + comment.user.username" aria-label="回复内容" />
@@ -72,6 +74,7 @@
                   <router-link class="author-link" :to="'/user/' + reply.user.id"><strong>{{ reply.user.username }}</strong></router-link><span class="reply-date">{{ formatTime(reply.createdAt) }}</span>
                   <p class="comment-text">{{ reply.content }}</p>
                   <el-button v-if="reply.canDelete" link size="small" type="danger" :disabled="busy.has('d' + reply.id)" @click="removeComment(reply)">删除</el-button>
+                  <el-button v-if="userStore.user && reply.user.id !== userStore.user.id" link size="small" @click="openReport('COMMENT',reply.id)">举报</el-button>
                 </div>
               </div>
               <el-button v-if="comment.replyCount > 3 && !expanded[comment.id]" link type="primary" :loading="busy.has('r' + comment.id)" @click="loadReplies(comment, 1)">查看全部 {{ comment.replyCount }} 条回复</el-button>
@@ -88,6 +91,7 @@
       <button class="dock-action" type="button" :aria-label="'查看 ' + post.commentCount + ' 条评论'" :aria-controls="'post-discussion-' + post.id" @click="jumpToDiscussion"><el-icon><ChatDotRound /></el-icon><span>{{ post.commentCount }}</span></button>
       <button class="dock-action" :class="{ saved: post.isFavorited }" type="button" :aria-label="post.isFavorited ? '取消收藏帖子' : '收藏帖子'" :aria-pressed="!!post.isFavorited" :disabled="busy.has('favorite')" @click="togglePost('favorite')"><el-icon><Collection /></el-icon><span>{{ post.isFavorited ? '已收藏' : '收藏' }}</span></button>
     </footer>
+    <ReportDialog v-model="reportOpen" :type="reportType" :target-id="reportTarget" />
   </div>
 </template>
 
@@ -100,6 +104,7 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import request from '@/utils/request';
+import ReportDialog from '@/components/ReportDialog.vue';
 import { useUserStore } from '@/stores/user';
 import { READING_FONT_OPTIONS, readReadingFont, saveReadingFont, readingFontStyle, type ReadingFont } from '@/utils/reading-preferences';
 import dayjs from 'dayjs';
@@ -107,6 +112,8 @@ import relativeTime from 'dayjs/plugin/relativeTime';
 import 'dayjs/locale/zh-cn';
 dayjs.extend(relativeTime); dayjs.locale('zh-cn');
 const route = useRoute(), router = useRouter(), userStore = useUserStore();
+const reportOpen=ref(false),reportType=ref<'POST'|'COMMENT'>('POST'),reportTarget=ref(0);
+function openReport(type:'POST'|'COMMENT',id:number){reportType.value=type;reportTarget.value=id;reportOpen.value=true;}
 const readingFont = ref<ReadingFont>(readReadingFont(userStore.user?.id)), readingPreferenceSaved = ref(true);
 const readingStyle = computed(() => readingFontStyle(readingFont.value));
 function setReadingFont(value: ReadingFont) {

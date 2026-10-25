@@ -33,6 +33,8 @@
             <div class="profile-shortcuts">
               <el-button plain @click="$router.push('/notifications')">消息通知</el-button>
               <el-button plain @click="$router.push('/forum/create')">发布新帖</el-button>
+              <el-button plain @click="$router.push('/user/memory')">我的记忆</el-button>
+              <el-button plain @click="$router.push('/reports')">举报与申诉</el-button>
             </div>
           </el-tab-pane>
           <el-tab-pane label="编辑资料" name="info">

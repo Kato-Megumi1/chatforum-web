@@ -11,7 +11,7 @@ const output = join(__dirname, '../../.local/chat-ux-review'); mkdirSync(output,
 const testKinds = (process.env.CHAT_UX_TEST_KINDS || 'ASSISTANT,ROLEPLAY').split(',');
 assert(testKinds.length && testKinds.every(kind => ['ASSISTANT', 'ROLEPLAY'].includes(kind)));
 const testFocus = process.env.CHAT_UX_TEST_FOCUS || 'all';
-assert(['all', 'parallel', 'typing', 'resume'].includes(testFocus));
+assert(['all', 'parallel', 'typing', 'resume', 'recovery'].includes(testFocus));
 const viewer = { id: 99231, username: '虚构体验测试', email: 'synthetic@example.test', role: 'USER' };
 const conversations = [
   { id: 12001, title: '合成普通对话', conversationType: 'ASSISTANT' },
@@ -52,7 +52,7 @@ async function assertTypingGeometry(page) {
 async function fixture(browser, width, kind, libraryMode = 'ready') {
   const page = await browser.newPage({ viewport: { width, height: 844 }, isMobile: width <= 900, hasTouch: width <= 900, reducedMotion: 'reduce' });
   page.setDefaultTimeout(12000);
-  const state = { messages: [], files: [], writes: [], calls: [], errors: [], runs: [], nextOutcome: 'success', library: gate() };
+  const state = { messages: [], files: [], writes: [], calls: [], errors: [], runs: [], recovery: [], nextOutcome: 'success', library: gate() };
   const cid = kind === 'ROLEPLAY' ? 12002 : 12001;
   page.on('pageerror', error => state.errors.push(error.message));
   await page.addInitScript(viewer => {
@@ -71,6 +71,7 @@ async function fixture(browser, width, kind, libraryMode = 'ready') {
     if (method === 'OPTIONS') return route.fulfill({ status: 204, headers: { ...headers, 'Access-Control-Allow-Headers': '*', 'Access-Control-Allow-Methods': '*' } });
     if (path === '/api/chat/config') return json({ configured: true, defaultModelId: 'qwen3.8-max', models: [{ id: 'qwen3.8-max', label: 'Qwen3.8-Max', available: true }] });
     if (path === '/api/chat/conversations') return json(conversations);
+    if (path === '/api/chat/runs/recovery') return json(Number(url.searchParams.get('conversationId')) === cid ? state.recovery : []);
     if (/\/chat\/conversations\/\d+\/messages$/.test(path)) {
       const conversationId = Number(path.split('/')[4]);
       return json(state.messages.filter(message => message.conversationId === conversationId));
@@ -312,6 +313,42 @@ async function fixture(browser, width, kind, libraryMode = 'ready') {
         assert.equal(await page.locator('.generation-failure').count(), 0, 'Completed A cannot inherit B cancellation');
         assert.deepEqual(state.errors, []);
         console.log(`PASS ${width}px parallel ASSISTANT conversations: A/B admitted, pending isolated, background completion preserved B, stop targeted B only`);
+      } finally { await f.close(); }
+    }
+    for (const width of testFocus === 'recovery' ? [390, 1440] : []) {
+      const f = await fixture(browser, width, 'ASSISTANT');
+      try {
+        const { page, state, busy, capture, textbox } = f;
+        const id = '10000000-0000-4000-8000-000000000001';
+        const active = { id, input: { conversationId: f.cid, question: '真实服务器保存的合成原题' },
+          status: 'RUNNING', reads: 0, finish: gate(), outcome: 'success' };
+        state.runs.push(active); state.recovery = [{ id, status: 'RUNNING' }];
+        await page.reload(); await busy(true);
+        assert.equal(await page.locator('.chat-message.user').count(), 0, 'Refresh cannot invent a USER message or reveal the private request');
+        assert.equal(await page.locator('.chat-message.assistant').count(), 1);
+        await page.locator('.generation-status .process-indicator').waitFor();
+        assert.equal(state.writes.length, 0, 'Re-subscribing never creates another paid task');
+        await capture('refresh-running-task');
+        state.recovery = []; active.finish.resolve(); await busy(false);
+        await page.getByText('真实服务器保存的合成原题', { exact: true }).waitFor();
+        assert.equal(await page.locator('.chat-message.user').count(), 1, 'Only successful real server history supplies the original turn');
+        assert.equal(state.writes.length, 0);
+        state.messages = [];
+        const pointer = { draftId: id, revision: 3, hash: 'b'.repeat(64) };
+        state.recovery = [{ id, status: 'FAILED', progress: { elapsedMs: 47000 }, result: {
+          ragMetadata: { generation: { fileIncomplete: true, truncated: true, canContinue: true, resumeFile: pointer,
+            privatePrefix: 'PRIVATE_SOURCE_MUST_NOT_APPEAR' } } } }];
+        await page.reload(); const resume = page.getByRole('button', { name: '继续完成文件', exact: true }); await resume.waitFor();
+        assert.equal(await page.locator('.chat-message.user').count(), 0);
+        assert.equal(await textbox.inputValue(), '', 'Discovery cannot overwrite composer text');
+        assert.equal(await page.getByRole('button', { name: '重新发送', exact: true }).count(), 0);
+        assert.equal(await page.locator('.generation-failure .failure-heading strong').innerText(), '文件尚未完成');
+        await capture('refresh-file-task'); await resume.click(); await busy(true);
+        assert.equal(state.writes.length, 1); assert.deepEqual(state.writes[0].resumeFile, pointer);
+        assert.equal(state.writes[0].question, '继续完成文件');
+        state.recovery = []; state.runs.at(-1).finish.resolve(); await busy(false);
+        assert.deepEqual(state.errors, []);
+        console.log(`PASS ${width}px refreshed tasks: original run reattached without POST/USER fabrication; real completed history restores, failed private file resumes only on explicit click`);
       } finally { await f.close(); }
     }
     for (const width of testFocus === 'resume' ? [390, 1440] : []) {

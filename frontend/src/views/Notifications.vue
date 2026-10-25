@@ -101,7 +101,7 @@ async function removeWatch(item: any) {
   finally { if (stamp === subscriptionGeneration) subscriptionBusy.delete(item.id); }
 }
 const formatTime = (time: string) => dayjs(time).format('MM-DD HH:mm');
-function target(item: any) { return typeof item.url === 'string' && /^\/(?:forum\/post\/\d+(?:\?comment=\d+)?|user\/\d+)$/.test(item.url) ? item.url : item.url === null ? null : notificationTarget(item); }
+function target(item: any) { return typeof item.url === 'string' && /^\/(?:forum\/post\/\d+(?:\?comment=\d+)?|user\/\d+|reports\?case=[1-9]\d*&tab=(?:mine|decisions))$/.test(item.url) ? item.url : item.url === null ? null : notificationTarget(item); }
 async function load() {
   const stamp = ++generation, account = user.user?.id;
   if (!account) return;

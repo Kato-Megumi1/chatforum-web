@@ -302,6 +302,16 @@ test('service-failed draft resume preserves a newer user draft and attachment ch
  assert.equal(f.sentCalls.length,0);assert.equal(f.store.draftAttachments[11][0].revision,2);active.unmount();
 });
 
+test('a discovered file failure without its private question can be resumed explicitly from the real Chat.vue handler',async()=>{
+ const f=chatRecoveryFixture(),active=f.view();await active.mount();f.store.draftAttachments[11]=[];
+ const reply={id:-2,conversationId:11,role:'assistant',failure:{retryable:false},
+  ragMetadata:{generation:{fileIncomplete:true,truncated:true,canContinue:true,resumeFile:resumePointer}}};
+ f.store.failedAttempts[11]={reply,runId:recoveredRunId};f.store.messages=[reply];active.inputText.value='';
+ const operation=active.continueAnswer(reply);await tick();
+ assert.equal(f.sentCalls.length,1);assert.equal(f.sentArguments()[0],'继续完成文件');assert.deepEqual(f.sentArguments()[9],resumePointer);
+ assert.deepEqual(f.sentArguments()[8].files,[]);f.run.resolve(true);await operation;active.unmount();
+});
+
 test('failed-file resume cannot mutate its restored draft during upload or same-conversation admission',async()=>{
  for(const blocked of ['upload','admission']){
   const f=chatRecoveryFixture(),active=f.view();await active.mount();
@@ -314,12 +324,14 @@ test('failed-file resume cannot mutate its restored draft during upload or same-
 });
 
 function durableStoreFixture({createWait,admitError}={}){
- const persisted=[],requests=[],waiters=[],saved=new Map();let runNumber=0,recoveredState={status:'RUNNING'};
+ const persisted=[],requests=[],waiters=[],saved=new Map(),recoveries=new Map(),pages=new Map(),pageReads=[];let runNumber=0,recoveredState={status:'RUNNING'};
  const original=draftConversation(),other=draftConversation(12);
- const request={get:async path=>{
+ const request={get:async(path,options)=>{
   requests.push(['get',path]);
   if(path==='/chat/conversations')return[original,other];
+  if(path.startsWith('/chat/runs/recovery?conversationId='))return recoveries.get(Number(path.split('=')[1]))||[];
   if(path.startsWith('/chat/runs/'))return recoveredState;
+  const pageId=Number(path.split('/')[3]);if(pages.has(pageId)){pageReads.push(options?.params);return pages.get(pageId)(options?.params||{});}
   return saved.get(Number(path.split('/')[3]))||[];
  },post:async(path,input)=>{requests.push(['post',path,input]);
   if(path==='/chat/conversations')return createWait?createWait.promise:draftConversation(13);
@@ -340,8 +352,124 @@ function durableStoreFixture({createWait,admitError}={}){
   if(Object.hasOwn(imports,name))return imports[name];throw Error(name);
  },mod,mod.exports,storage,storage);
  const store=mod.exports.useChatStore();store.conversations=[original,other];store.currentConversation=original;
- return{store,original,other,requests,persisted,waiters,saved,setState:value=>{recoveredState=value;}};
+ return{store,original,other,requests,persisted,waiters,saved,pageReads,setPages:(cid,fn)=>pages.set(cid,fn),setState:value=>{recoveredState=value;},setRecovery:(cid,value)=>recoveries.set(cid,value)};
 }
+
+test('seek pages load only the latest window then prepend unique older messages',async()=>{
+ const f=durableStoreFixture();f.setPages(11,params=>params.before?
+  {items:[{id:1,role:'USER',content:'old',conversationId:11},{id:2,role:'ASSISTANT',content:'middle',conversationId:11}],hasMore:false,olderCursor:null}:
+  {items:[{id:2,role:'ASSISTANT',content:'middle',conversationId:11},{id:3,role:'USER',content:'new',conversationId:11}],hasMore:true,olderCursor:'signed-cursor'});
+ await f.store.selectConversation(f.original);assert.deepEqual(f.store.messages.map(row=>row.id),[2,3]);assert.equal(f.store.hasOlderMessages,true);
+ assert.equal(await f.store.loadOlderMessages(),1);assert.deepEqual(f.store.messages.map(row=>row.id),[1,2,3]);assert.equal(f.store.hasOlderMessages,false);
+ assert.deepEqual(f.pageReads,[{pagination:'seek',limit:40},{pagination:'seek',limit:40,before:'signed-cursor'}]);
+});
+test('a late old-page result cannot change another conversation or an account reset',async()=>{
+ for(const reset of [false,true]){
+  const f=durableStoreFixture(),wait=deferred();f.setPages(11,params=>params.before?wait.promise:
+   {items:[{id:3,role:'USER',content:'new',conversationId:11}],hasMore:true,olderCursor:'signed'});
+  await f.store.selectConversation(f.original);const loading=f.store.loadOlderMessages();await tick();
+  if(reset)f.store.resetForUser();else await f.store.selectConversation(f.other);
+  wait.resolve({items:[{id:1,role:'USER',content:'private old',conversationId:11}],hasMore:false,olderCursor:null});
+  assert.equal(await loading,0);assert.deepEqual(f.store.messages,[]);
+ }
+});
+test('source navigation uses the bounded around API and respects the selected conversation',async()=>{
+ const f=durableStoreFixture();f.setPages(11,params=>({items:[{id:params.around||90,role:'USER',content:'source',conversationId:11}],hasMore:true,olderCursor:'signed'}));
+ await f.store.selectConversation(f.original);assert.equal(await f.store.loadAroundMessage(20),true);
+ assert.deepEqual(f.pageReads.at(-1),{pagination:'seek',limit:40,around:20});assert.deepEqual(f.store.messages.map(row=>row.id),[20]);
+});
+test('waiting approval stops the spinner but locks the conversation and approval resumes the exact existing run',async()=>{
+ const f=durableStoreFixture(),sending=f.store.sendMessage('Subscribe to this topic');await tick();
+ f.waiters[0].onDelta('discarded pre-approval prefix');
+ f.waiters[0].resolve({status:'WAITING_APPROVAL'});await sending;
+ assert.equal(f.store.isStreaming,true);assert.equal(f.store.isConversationAwaitingApproval(11),true);
+ assert.equal(f.store.messages.at(-1).pending,false);assert.equal(f.store.messages.at(-1).waitingApproval,true);assert.equal(f.store.messages.at(-1).content,'');
+ assert.equal(Object.keys(f.store.failedAttempts).length,0);assert.equal(await f.store.sendMessage('new task'),false);
+ f.store.onToolApprovalChanged({runId:'run-1',status:'QUEUED'});assert.equal(f.waiters.length,2);assert.equal(f.waiters[1].id,'run-1');
+ f.waiters[1].onDelta('post-approval answer');assert.equal(f.store.messages.at(-1).content,'post-approval answer');
+ assert.equal(f.requests.filter(([method])=>method==='post').length,1);f.store.resetForUser();f.waiters[1].resolve({status:'CANCELLED'});await tick();
+});
+test('refresh discovers waiting approval without opening a paid task or a pointless SSE subscription',async()=>{
+ const f=durableStoreFixture();f.setRecovery(11,[{id:'10000000-0000-4000-8000-000000000001',status:'WAITING_APPROVAL'}]);
+ await f.store.selectConversation(f.original);assert.equal(f.store.isConversationAwaitingApproval(11),true);assert.equal(f.waiters.length,0);
+ assert.deepEqual(f.store.messages.map(message=>message.role),['assistant']);assert.equal(f.store.messages[0].waitingApproval,true);
+ assert.equal(f.requests.filter(([method])=>method==='post').length,0);f.store.resetForUser();
+});
+
+const recoveredRunId='10000000-0000-4000-8000-000000000001';
+test('refresh discovers and subscribes to an existing task without posting a second run or inventing a user message',async()=>{
+ const f=durableStoreFixture();f.store.currentConversation=null;
+ f.setRecovery(11,[{id:recoveredRunId,status:'RUNNING'}]);
+ await f.store.selectConversation(f.original);
+ assert.equal(f.store.isStreaming,true);assert.equal(f.waiters.length,1);assert.equal(f.waiters[0].id,recoveredRunId);
+ assert.deepEqual(f.store.messages.map(m=>m.role),['assistant']);assert.equal(f.store.messages[0].pending,true);
+ assert.equal(f.requests.filter(([method])=>method==='post').length,0);
+ f.waiters[0].onDelta('replayed public text');f.waiters[0].onProgress({elapsedMs:42000});
+ assert.equal(f.store.messages[0].content,'replayed public text');
+ await f.store.selectConversation(f.other);await f.store.selectConversation(f.original);
+ assert.deepEqual(f.store.messages.map(m=>m.role),['assistant']);assert.equal(f.waiters.length,1);
+ f.saved.set(11,[{id:10,role:'USER',content:'Real server question',conversationId:11},{id:11,role:'ASSISTANT',content:'Completed',conversationId:11}]);
+ f.setRecovery(11,[]);f.waiters[0].resolve({status:'COMPLETED',result:{content:'Completed'}});await tick();await tick();
+ assert.equal(f.store.isStreaming,false);assert.deepEqual(f.store.messages.map(m=>m.id),[10,11]);
+ assert.equal(f.requests.filter(([method])=>method==='post').length,0);
+});
+test('refresh restores only a safe file resume card, never its original request or a new composer draft',async()=>{
+ const f=durableStoreFixture();f.store.currentConversation=null;f.store.drafts[11]='A new draft';f.store.draftAttachments[11]=[attachment];
+ f.setRecovery(11,[{id:recoveredRunId,status:'FAILED',progress:{elapsedMs:47000},result:{
+   privateState:{content:'PRIVATE_SOURCE'},ragMetadata:{generation:{fileIncomplete:true,truncated:true,canContinue:true,resumeFile:resumePointer,privatePrefix:'PRIVATE_CODE'}}}}]);
+ await f.store.selectConversation(f.original);
+ assert.deepEqual(f.store.messages.map(m=>m.role),['assistant']);assert.equal(f.store.messages[0].failure.elapsedMs,47000);
+ assert.deepEqual(f.store.messages[0].ragMetadata.generation.resumeFile,resumePointer);assert.equal(f.store.messages[0].failure.retryable,false);
+ assert.equal(f.store.failedAttempts[11].question,undefined);assert(!JSON.stringify(f.store.messages).includes('PRIVATE_'));
+ assert.equal(f.store.drafts[11],'A new draft');assert.deepEqual(f.store.draftAttachments[11],[attachment]);
+ assert.equal(f.requests.filter(([method])=>method==='post').length,0);
+ f.store.dismissFailedAttempt(11);await f.store.selectConversation(f.original);assert.deepEqual(f.store.messages,[]);
+});
+test('no-source failures, revoked resume pointers and roleplay file metadata do not invent a retry action after refresh',async()=>{
+ for(const state of [
+   {id:recoveredRunId,status:'FAILED',error:'Original failed request is private'},
+   {id:recoveredRunId,status:'FAILED',result:{ragMetadata:{generation:{fileIncomplete:true,truncated:true,canContinue:false,resumeFile:resumePointer}}}},
+ ]){
+  const f=durableStoreFixture();f.setRecovery(11,[state]);await f.store.selectConversation(f.original);assert.deepEqual(f.store.messages,[]);assert.equal(f.waiters.length,0);
+ }
+ const f=durableStoreFixture(),role={...f.original,conversationType:'ROLEPLAY',personaKey:'kato_megumi_persona'};
+ f.setRecovery(11,[{id:recoveredRunId,status:'FAILED',result:{ragMetadata:{generation:{fileIncomplete:true,truncated:true,canContinue:true,resumeFile:resumePointer}}}}]);
+ await f.store.selectConversation(role);assert.deepEqual(f.store.messages,[]);assert.equal(f.waiters.length,0);
+});
+test('late discovery cannot hydrate another selected conversation or a reset account epoch',async()=>{
+ for(const accountChange of [false,true]){
+  const f=durableStoreFixture(),wait=deferred();f.setRecovery(11,wait.promise);
+  const pending=f.store.selectConversation(f.original);await tick();
+  if(accountChange){f.store.resetForUser();const other=draftConversation(21,8);f.store.conversations=[other];await f.store.selectConversation(other);}
+  else await f.store.selectConversation(f.other);
+  wait.resolve([{id:recoveredRunId,status:'RUNNING'}]);await pending;
+  assert.equal(f.waiters.length,0);assert.deepEqual(f.store.messages,[]);assert.equal(f.store.isStreaming,false);
+ }
+});
+test('late recovered stream output is discarded on logout or same-id login reset',async()=>{
+ const f=durableStoreFixture();f.setRecovery(11,[{id:recoveredRunId,status:'RUNNING'}]);await f.store.selectConversation(f.original);
+ f.store.resetForUser();f.store.conversations=[f.original];f.store.currentConversation=f.original;
+ f.waiters[0].onDelta('PRIVATE_OLD_ACCOUNT');f.waiters[0].resolve({status:'FAILED',result:{ragMetadata:{generation:{fileIncomplete:true,truncated:true,canContinue:true,resumeFile:resumePointer}}}});
+ await tick();assert.deepEqual(f.store.messages,[]);assert.deepEqual(f.store.failedAttempts,{});assert.equal(f.store.isStreaming,false);
+});
+test('a recovered subscription failure with a still-running HTTP state cannot recursively subscribe again',async()=>{
+ const f=durableStoreFixture();f.setRecovery(11,[{id:recoveredRunId,status:'RUNNING'}]);await f.store.selectConversation(f.original);
+ f.waiters[0].reject(Error('Synthetic connection failure'));await tick();await tick();
+ assert.equal(f.waiters.length,1);assert.equal(f.store.isStreaming,false);assert.equal(f.store.messages[0].failure.retryable,false);
+ assert.match(f.store.messages[0].failure.message,/可能仍在生成/);assert.equal(f.requests.filter(([method])=>method==='post').length,0);
+ await f.store.selectConversation(f.original);assert.equal(f.waiters.length,2,'Only explicitly reopening the conversation reattaches');
+ f.setState({status:'CANCELLED'});f.setRecovery(11,[]);f.waiters[1].resolve({status:'CANCELLED'});await tick();await tick();
+ assert.equal(f.store.messages[0].failure.retryable,false,'No original question means no ordinary resend action');
+});
+test('discovery racing an explicit new send never replaces that new in-memory attempt',async()=>{
+ const f=durableStoreFixture(),wait=deferred();f.setRecovery(11,wait.promise);
+ const pending=f.store.selectConversation(f.original);await tick();
+ const sending=f.store.sendMessage('New explicit request');await tick();
+ wait.resolve([{id:recoveredRunId,status:'RUNNING'}]);await pending;
+ assert.equal(f.waiters.length,1);assert.equal(f.store.messages[0].content,'New explicit request');
+ f.waiters[0].resolve({status:'CANCELLED'});await sending;
+ assert.equal(f.requests.filter(([method])=>method==='post').length,1);
+});
 
 test('failed durable task retains its question, attachments, error and elapsed time across conversation reloads without persisting history',async()=>{
  const f=durableStoreFixture(),sending=f.store.sendConfigured(failed.text,'normal',[],undefined,undefined,undefined,undefined,undefined,{files:[attachment]});
