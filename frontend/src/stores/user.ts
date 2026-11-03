@@ -88,9 +88,14 @@ export const useUserStore = defineStore(
     const logout = async () => {
       const session = getAuthSession();
       try {
-        await request.post('/auth/logout', {
+        const result = await request.post<{ revokedAllSessions?: boolean }>('/auth/logout', {
           refreshToken: refreshToken.value,
-        });
+        }, { _quiet: true });
+        assertAuthSession(session);
+        return { revokedAllSessions: result?.revokedAllSessions === true };
+      } catch (error) {
+        assertAuthSession(session);
+        throw error;
       } finally {
         if (isAuthSession(session)) clearAuth();
       }

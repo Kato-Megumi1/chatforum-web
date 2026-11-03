@@ -123,8 +123,44 @@ test('user auth epoch is closure-only and survives ordinary refresh/profile upda
 });
 test('late logout finally does not clear a newly selected account',async()=>{
  const wait=deferred(),{store}=userFixture({post:()=>wait.promise});store.setUser(authData(1).user);store.setToken('a','refresh-a');const pending=store.logout();
- store.setUser(authData(2).user);store.setToken('b','refresh-b');wait.resolve({});await pending;
+ store.setUser(authData(2).user);store.setToken('b','refresh-b');wait.resolve({});await assert.rejects(pending,{code:'AUTH_SESSION_CHANGED'});
  assert.equal(store.user.value.id,2);assert.equal(store.token.value,'b');
+});
+
+test('logout reports server revocation only on an explicit receipt and always clears its own local session',async()=>{
+ for(const revokedAllSessions of [true,false,undefined]){
+  const calls=[],{store}=userFixture({post:async(...args)=>{calls.push(args);return{revokedAllSessions};}});
+  store.setUser(authData(1).user);store.setToken('a','refresh-a');
+  assert.deepEqual(await store.logout(),{revokedAllSessions:revokedAllSessions===true});
+  assert.equal(store.user.value,null);assert.equal(store.token.value,'');
+  assert.equal(calls[0][0],'/auth/logout');assert.equal(calls[0][1].refreshToken,'refresh-a');assert.equal(calls[0][2]._quiet,true);
+ }
+ const error=Error('offline'),{store}=userFixture({post:async()=>{throw error;}});
+ store.setUser(authData(1).user);store.setToken('a','refresh-a');
+ await assert.rejects(store.logout(),value=>value===error);assert.equal(store.user.value,null);assert.equal(store.token.value,'');
+});
+
+test('a rejected logout never rotates its refresh proof or replays the write',async()=>{
+ const f=fixture(),config=f.stamp('/auth/logout');config._quiet=true;
+ const error=f.error(config);await assert.rejects(f.rejected(error),value=>value===error);
+ assert.deepEqual(f.actions,[]);assert.deepEqual(f.messages,[]);
+});
+
+function logoutView({receipt={revokedAllSessions:true},reject=false}={}){
+ const notices=[],navigations=[],session={userId:1,epoch:1};
+ const store={user:{id:1},token:'fixture',getAuthSession:()=>({...session}),async logout(){store.user=null;store.token='';session.userId=null;session.epoch++;if(reject)throw Error('offline');return receipt;}};
+ const source=readFileSync(join(__dirname,'../src/layouts/MainLayout.vue'),'utf8').match(/const handleLogout = async \(\) => \{[\s\S]*?\n\};/)[0];
+ const mod={exports:{}},code=ts.transpileModule(source+'\nexport {handleLogout};',{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
+ new Function('userStore','ElMessageBox','ElMessage','router','module','exports',code)(store,{confirm:async()=>{}},
+  {success:text=>notices.push(['success',text]),warning:text=>notices.push(['warning',text])},{push:path=>navigations.push(path)},mod,mod.exports);
+ return{run:mod.exports.handleLogout,notices,navigations};
+}
+
+test('logout UI does not claim confirmed server logout when revocation is missing or offline',async()=>{
+ const confirmed=logoutView();await confirmed.run();assert.deepEqual(confirmed.notices,[['success','已退出登录']]);
+ for(const options of [{receipt:{revokedAllSessions:false}},{receipt:{}},{reject:true}]){
+  const f=logoutView(options);await f.run();assert.deepEqual(f.notices,[['warning','已退出本机登录，服务器未确认会话撤销']]);assert.deepEqual(f.navigations,['/login']);
+ }
 });
 test('late login/profile results cannot overwrite the new account even after the HTTP promise resolves',async()=>{
  for(const operation of ['login','register','refresh','updateProfile']){

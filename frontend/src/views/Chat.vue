@@ -211,6 +211,9 @@
               </div>
               <ToolApprovals v-if="isAssistant && msg.waitingApproval" :conversation-id="msg.conversationId"
                 :revision="chatStore.approvalRevision" @changed="chatStore.onToolApprovalChanged" />
+              <CodingChecklist v-if="isAssistant && msg.role === 'assistant' && (msg.ragMetadata?.codingChecklist || codingChecklistRunId(msg))"
+                :conversation-id="msg.conversationId" :run-id="codingChecklistRunId(msg)" :initial="msg.ragMetadata?.codingChecklist"
+                :active="!!msg.pending || !!msg.waitingApproval" />
               <GenerationStatus v-if="msg.role === 'assistant' && !msg.failure && !msg.waitingApproval" :pending="msg.pending" :busy="chatStore.isStreaming"
                 :progress="msg.ragMetadata?.performance" :generation="isAssistant ? msg.ragMetadata?.generation : undefined"
                 :allow-thinking="isAssistant" @continue="continueAnswer(msg)" />
@@ -301,6 +304,9 @@
         <el-form-item v-if="chatStore.currentConversation && !isLegacy" :label="hasPersonaActive ? '同角色跨会话记忆' : '普通 AI 跨会话记忆'">
           <el-switch :model-value="!!chatStore.currentConversation.sharedMemory" :disabled="chatStore.isStreaming" @change="toggleSharedMemory" />
         </el-form-item>
+        <CodingSkillPreferences v-if="showSettings && isAssistant && codingEnabled"
+          :conversation-id="chatStore.currentConversation?.id" v-model:mode="codingSkillMode" v-model:selected="codingSkillNames"
+          :busy="chatStore.isStreaming || uploadingFiles" />
         <div v-if="agentMode === 'agent'" class="skills-section">
           <div class="skills-header">
             <span class="skills-label">工具</span>
@@ -336,14 +342,15 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { marked } from 'marked';
-import { forumPostPath, resolveForumLinks } from '@/utils/forum-links';
+import { forumPostPath } from '@/utils/forum-links';
+import { renderSafeMarkdown } from '@/utils/safe-markdown';
 import { initialChat, type ChatSpace } from '@/utils/chat-navigation';
-import DOMPurify from 'dompurify';
 import RagEvidence from '@/components/RagEvidence.vue';
 import WebSearchSources from '@/components/WebSearchSources.vue';
 import AssistantComposer from '@/components/AssistantComposer.vue';
 import CodeWorkspace from '@/components/CodeWorkspace.vue';
+import CodingSkillPreferences from '@/components/CodingSkillPreferences.vue';
+import CodingChecklist from '@/components/CodingChecklist.vue';
 import FileArtifacts from '@/components/FileArtifacts.vue';
 import MessageAttachments from '@/components/MessageAttachments.vue';
 import GenerationStatus from '@/components/GenerationStatus.vue';
@@ -378,6 +385,7 @@ const inputText = ref('');
 const messagePlaceholder = '输入消息…';
 const showSettings = ref(false);
 const showCode = ref(false), draftMode = ref('normal'), draftCoding = ref(false);
+const draftCodingSkillMode = ref<'auto' | 'custom' | 'off'>('auto'), draftCodingSkillNames = ref<string[]>([]);
 const draftDeepThinking = ref(true), draftWebSearch = ref(false);
 const showRenameDialog = ref(false);
 const renameTitle = ref('');
@@ -443,6 +451,10 @@ const switchPersona = async (persona: string) => {
 const messageIdentity = (msg: any) => {
   const key = msg.ragMetadata?.personaKey;
   return key === 'assistant' ? 'AI 助手' : personaMap[key]?.name || (isLegacy.value ? '历史助理' : aiDisplayName.value);
+};
+const codingChecklistRunId = (msg: any) => {
+  return isAssistant.value && (msg.pending || msg.waitingApproval)
+    ? chatStore.codingChecklistRunIdForMessage(msg.conversationId, msg.id) : undefined;
 };
 
 // Mode & persona settings, persisted per-conversation via chat store
@@ -552,11 +564,35 @@ const selectedKnowledgeIssue = computed(() => {
 });
 
 const toolSkills = computed(() => {
-  return skills.value.filter(s => s.category !== '角色扮演' && s.name !== 'code_workspace' && s.name !== 'web_search');
+  return skills.value.filter(s => s.category !== '角色扮演' && s.name !== 'code_workspace' && s.name !== 'web_search' && s.name !== 'load_coding_skill' && s.name !== 'coding_checklist');
 });
 const codingEnabled = computed({
   get: () => chatStore.currentConversation ? !!chatStore.getConversationSettings(chatStore.currentConversation.id).codingEnabled : draftCoding.value,
   set: (value: boolean) => { if (chatStore.currentConversation) chatStore.saveConversationSettings(chatStore.currentConversation.id, { codingEnabled: value }); else draftCoding.value = value; },
+});
+const codingSkillMode = computed({
+  get: (): 'auto' | 'custom' | 'off' => {
+    const cid = chatStore.currentConversation?.id;
+    const mode = cid ? chatStore.getConversationSettings(cid).codingSkillMode : draftCodingSkillMode.value;
+    return mode === 'custom' || mode === 'off' ? mode : 'auto';
+  },
+  set: (mode: 'auto' | 'custom' | 'off') => {
+    if (!ownsView() || !isAssistant.value || chatStore.isStreaming || uploadingFiles.value) return;
+    const cid = chatStore.currentConversation?.id;
+    if (cid) chatStore.saveConversationSettings(cid, { codingSkillMode: mode }); else draftCodingSkillMode.value = mode;
+  },
+});
+const codingSkillNames = computed({
+  get: (): string[] => {
+    const cid = chatStore.currentConversation?.id;
+    const names = cid ? chatStore.getConversationSettings(cid).codingSkillNames : draftCodingSkillNames.value;
+    return Array.isArray(names) ? names : [];
+  },
+  set: (names: string[]) => {
+    if (!ownsView() || !isAssistant.value || chatStore.isStreaming || uploadingFiles.value) return;
+    const cid = chatStore.currentConversation?.id;
+    if (cid) chatStore.saveConversationSettings(cid, { codingSkillNames: [...names] }); else draftCodingSkillNames.value = [...names];
+  },
 });
 let creatingAssistant: Promise<void> | undefined;
 async function ensureAssistantConversation() {
@@ -567,7 +603,8 @@ async function ensureAssistantConversation() {
 }
 async function createAssistant() {
   const mode = draftMode.value, coding = draftCoding.value, draft = inputText.value;
-  const options = { deepThinking: draftDeepThinking.value, webSearch: draftWebSearch.value };
+  const options = { deepThinking: draftDeepThinking.value, webSearch: draftWebSearch.value,
+    codingSkillMode: draftCodingSkillMode.value, codingSkillNames: [...draftCodingSkillNames.value] };
   const conversation = await chatStore.createConversation(undefined, { conversationType: 'ASSISTANT' });
   if (!ownsView() || !isAssistant.value || chatStore.currentConversation) throw new Error('已切换页面，请在当前会话重试');
   chatStore.saveConversationSettings(conversation.id, { agentMode: mode, knowledgeBaseId: 0, codingEnabled: coding, ...options });
@@ -734,8 +771,7 @@ onBeforeRouteLeave(() => { saveView(); });
 onBeforeUnmount(() => { saveView(); viewActive = false; window.removeEventListener('pagehide', onPageHide); });
 
 const renderMarkdown = (content: string) => {
-  const safe = DOMPurify.sanitize(marked.parse(content, { async: false }) as string, { FORBID_TAGS: ['img', 'form', 'input'], FORBID_ATTR: ['style'] });
-  return resolveForumLinks(safe, path => router.resolve(path).href);
+  return renderSafeMarkdown(content, path => router.resolve(path).href);
 };
 
 const formatTime = (time: string) => {
@@ -926,7 +962,7 @@ const handleSendMessage = async (resumeInput?: unknown) => {
         personaLabel: customPersonaName.value, customPersonaPrompt: systemPrompt });
     if (chatStore.currentConversation?.id !== sendingConversationId) throw new Error('会话已切换，请在原会话重新发送');
     const skills = [
-      ...(agentMode.value === 'agent' ? enabledSkills.value.filter(s => s !== 'code_workspace' && s !== 'web_search') : []),
+      ...(agentMode.value === 'agent' ? enabledSkills.value.filter(s => s !== 'code_workspace' && s !== 'web_search' && s !== 'load_coding_skill' && s !== 'coding_checklist') : []),
       ...(isAssistant.value && (codingEnabled.value || sendingFiles.length) ? ['code_workspace'] : []),
     ];
     const kbId = selectedKnowledgeBaseId.value > 0 ? selectedKnowledgeBaseId.value : undefined;
@@ -1019,7 +1055,7 @@ const loadSkills = async () => {
     const data = await request.get<any[]>('/chat/skills');
     skills.value = data;
     // Only auto-enable tool skills, not persona skills
-    enabledSkills.value = data.filter(s => s.enabled && s.category !== '角色扮演' && s.name !== 'code_workspace' && s.name !== 'web_search').map(s => s.name);
+    enabledSkills.value = data.filter(s => s.enabled && s.category !== '角色扮演' && s.name !== 'code_workspace' && s.name !== 'web_search' && s.name !== 'load_coding_skill' && s.name !== 'coding_checklist').map(s => s.name);
   } catch {
     // Ignore
   }

@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vue-tsc && vite build",
     "preview": "vite preview",
-    "test": "node --test test/sse.cjs test/chat-stream.cjs test/api-config.cjs test/registration-validation.cjs test/forum-links.cjs test/forum-experience.cjs test/chat-model-selection.cjs test/chat-navigation.cjs test/code-workspace.cjs test/local-code-files.cjs test/clipboard-files.cjs test/message-attachments.cjs test/request-login.cjs test/direct-messages.cjs test/profile-session.cjs test/community-request-state.cjs test/forum-search-history.cjs test/reading-preferences.cjs test/roleplay-defaults.cjs test/read-refresh-cache.cjs test/forum-feed-cache.cjs test/knowledge-review-removal.cjs test/generation-process.cjs test/response-options.cjs test/web-search-sources.cjs test/artifact-review.cjs test/chat-copy-cleanup.cjs test/ui-copy.cjs test/forum-reports.cjs test/tool-approvals.cjs test/memory-controls.cjs",
+    "test:security": "node --test test/markdown-security.cjs test/request-login.cjs && node ../scripts/check-markdown-security.cjs",
+    "test": "node --test test/sse.cjs test/chat-stream.cjs test/api-config.cjs test/registration-validation.cjs test/forum-links.cjs test/markdown-security.cjs test/forum-experience.cjs test/chat-model-selection.cjs test/chat-navigation.cjs test/code-workspace.cjs test/local-code-files.cjs test/clipboard-files.cjs test/message-attachments.cjs test/request-login.cjs test/direct-messages.cjs test/profile-session.cjs test/community-request-state.cjs test/forum-search-history.cjs test/reading-preferences.cjs test/roleplay-defaults.cjs test/read-refresh-cache.cjs test/forum-feed-cache.cjs test/knowledge-review-removal.cjs test/generation-process.cjs test/response-options.cjs test/web-search-sources.cjs test/artifact-review.cjs test/chat-copy-cleanup.cjs test/ui-copy.cjs test/forum-reports.cjs test/tool-approvals.cjs test/memory-controls.cjs test/coding-skills.cjs",
     "lint": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs,.ts,.tsx,.cts,.mts --fix --ignore-path .gitignore",
     "format": "prettier --write src/"
   },
@@ -28,7 +29,11 @@
     "vue-virtual-scroller": "^2.0.0-beta.8"
   },
   "overrides": {
-    "source-map-js": "1.2.2"
+    "source-map-js": "1.2.2",
+    "follow-redirects": "1.16.2",
+    "brace-expansion@^1.1.7": "1.1.21",
+    "brace-expansion@^2.0.1": "2.1.7",
+    "postcss-selector-parser@^6.0.9": "6.1.5"
   },
   "devDependencies": {
     "@types/js-cookie": "^3.0.6",
@@ -44,7 +49,7 @@
     "sass": "^1.75.0",
     "typescript": "^5.4.5",
     "unplugin-vue-components": "32.1.0",
-    "vite": "^7.3.6",
+    "vite": "^7.3.7",
     "vue-tsc": "^2.0.6"
   }
 }

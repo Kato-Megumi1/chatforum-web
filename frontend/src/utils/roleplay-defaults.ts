@@ -6,9 +6,28 @@ export interface ConversationSettings {
   knowledgeBaseId: number;
   modelId?: string;
   codingEnabled?: boolean;
+  codingSkillMode?: 'auto' | 'custom' | 'off';
+  codingSkillNames?: string[];
   katoDefaultKnowledgePending?: boolean;
   deepThinking?: boolean;
   webSearch?: boolean;
+}
+
+/** Workflow selections never turn a tool on or cross into roleplay / draft continuation. */
+export function conversationCodingSkills(
+  settings: Pick<ConversationSettings, 'codingEnabled' | 'codingSkillMode' | 'codingSkillNames'> | undefined,
+  conversationType: string,
+  enabledTools: readonly string[] | undefined,
+  resuming = false,
+): { codingAgent?: true; codingSkills?: string[] } {
+  if (conversationType !== 'ASSISTANT' || settings?.codingEnabled !== true || !enabledTools?.includes('code_workspace') || resuming) return {};
+  if (settings.codingSkillMode === 'off') return { codingAgent: true, codingSkills: [] };
+  if (settings.codingSkillMode !== 'custom') return { codingAgent: true };
+  // Corrupt old preferences fail closed; none can inject a body, path or command.
+  const names = settings.codingSkillNames;
+  if (!Array.isArray(names) || names.length > 12 || names.some(name => typeof name !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name) || name.length > 64))
+    return { codingAgent: true, codingSkills: [] };
+  return { codingAgent: true, codingSkills: [...new Set(names)] };
 }
 
 /** Missing options in older saved conversations use the same explicit defaults. */

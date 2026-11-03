@@ -104,7 +104,8 @@ http.interceptors.response.use(
       return Promise.reject(error);
     }
 
-    if (error.response?.status === 401 && originalRequest && !originalRequest._retry) {
+    if (error.response?.status === 401 && originalRequest && !originalRequest._retry &&
+      originalRequest.url?.split('?')[0] !== '/auth/logout') {
       // Every real request is stamped before dispatch. Never infer the identity
       // of an unstamped failed request from whichever account is logged in now.
       if (!session) return Promise.reject(sessionChanged());

@@ -99,9 +99,8 @@
 import { ref, reactive, watch, computed, nextTick, onUnmounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { readForumNavigation } from '@/utils/forum-experience';
-import { forumPostPath, resolveForumLinks } from '@/utils/forum-links';
-import { marked } from 'marked';
-import DOMPurify from 'dompurify';
+import { forumPostPath } from '@/utils/forum-links';
+import { renderSafeMarkdown } from '@/utils/safe-markdown';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import request from '@/utils/request';
 import ReportDialog from '@/components/ReportDialog.vue';
@@ -132,9 +131,7 @@ const focusUnavailable = ref(false);
 const tracking = ref(false), trackedPost = ref<number | null>(null);
 let trackingRequest = 0;
 const legacyContent = computed(() => {
-  const safe = DOMPurify.sanitize(marked.parse(post.value?.content || '', { async: false }) as string,
-    { FORBID_TAGS: ['style', 'iframe', 'form', 'input'], FORBID_ATTR: ['style', 'data-forum-post-path'] });
-  return resolveForumLinks(safe, path => router.resolve(path).href);
+  return renderSafeMarkdown(post.value?.content || '', path => router.resolve(path).href, { allowImages: true });
 });
 function handleLegacyLink(event: MouseEvent) {
   if (event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;

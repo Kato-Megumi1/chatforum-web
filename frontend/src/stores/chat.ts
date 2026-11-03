@@ -6,8 +6,9 @@ import { disconnectLocalWorkspace, localWorkspace } from '@/utils/local-workspac
 import { CHAT_NAVIGATION_KEY, emptyChatNavigation, readChatNavigation, type ChatSpace } from '@/utils/chat-navigation';
 import { chatFileRef, type ChatFile } from '@/utils/chat-files';
 import { selectedChatModel } from '@/utils/chat-model-selection';
-import { conversationResponseOptions, ensureConversationSettings, type ConversationSettings } from '@/utils/roleplay-defaults';
+import { conversationCodingSkills, conversationResponseOptions, ensureConversationSettings, type ConversationSettings } from '@/utils/roleplay-defaults';
 import { readFileResume, readRecoverableFileGeneration, type FileResumePointer } from '@/utils/file-resume';
+import { readCodingChecklist } from '@/utils/coding-checklist';
 
 interface Conversation { id: number; title: string; isPinned: boolean; userId: number; createdAt: string; updatedAt: string;
   conversationType: 'ASSISTANT' | 'ROLEPLAY' | 'LEGACY'; personaKey?: string; personaLabel?: string;
@@ -17,14 +18,18 @@ interface Message { id: number; role: 'system' | 'user' | 'assistant'; content: 
   failure?: { message: string; elapsedMs: number; cancelled: boolean; retryable: boolean } }
 interface FailedAttempt { question?: Message; reply: Message; runId?: string }
 interface ConversationRun { controller: AbortController; epoch: number; runId?: string; waitingApproval?:boolean;
-  question?: Message; reply?: Message; settled?: boolean }
+  question?: Message; reply?: Message; settled?: boolean; codingAgent?: boolean }
 interface ChatModel { id: string; label: string; available: boolean; unavailableReason: string | null }
-interface Run { id?: string; status: string; error?: string; createdAt?: string; progress?: { elapsedMs?: number }; result?: { content?: string; ragMetadata?: any;
+interface Run { id?: string; status: string; error?: string; createdAt?: string; codingAgent?: boolean; progress?: { elapsedMs?: number }; result?: { content?: string; ragMetadata?: any;
   failure?: { code?: string; message?: string } } }
 const failureMessageFor = (run: Run) => run.result?.failure?.message || run.error || '本次回答未生成，请重新发送';
 const retainFailedFileRecovery = (reply: Message | undefined, run: Run) => {
   const generation = readRecoverableFileGeneration(run.result?.ragMetadata?.generation);
   if (reply && generation) reply.ragMetadata = { ...reply.ragMetadata, generation };
+  try {
+    const codingChecklist = readCodingChecklist(run.result?.ragMetadata?.codingChecklist, run.id);
+    if (reply && codingChecklist) reply.ragMetadata = { ...reply.ragMetadata, codingChecklist };
+  } catch { /* Malformed or wrong-run snapshots cannot be recovered as verified work. */ }
 };
 
 // Drop provider secrets written by older app versions, without dropping role settings.
@@ -49,6 +54,12 @@ export const useChatStore = defineStore('chat', () => {
   const abortController = computed(() => currentRun.value?.controller || null);
   const isConversationStreaming = (id: number) => !!conversationRuns.value[id];
   const isConversationAwaitingApproval=(id:number)=>conversationRuns.value[id]?.waitingApproval===true;
+  const codingChecklistRunIdForMessage = (cid: number, messageId: number) => {
+    const runtime = conversationRuns.value[cid];
+    const conversation = currentConversation.value?.id === cid ? currentConversation.value : conversations.value.find(item => item.id === cid);
+    return conversation?.conversationType === 'ASSISTANT' && runtime?.codingAgent === true && runtime?.reply?.id === messageId
+      ? runtime.runId : undefined;
+  };
   let selection = 0;
   let identityEpoch = 0;
   const navigation = ref(emptyChatNavigation(0));
@@ -243,9 +254,13 @@ export const useChatStore = defineStore('chat', () => {
     const reply: Message = { id: -Date.now()-1, role: 'assistant', content: '', conversationId: cid,
       createdAt: state.createdAt || new Date().toISOString() };
     const recoveringFile = conversation.conversationType === 'ASSISTANT' && readRecoverableFileGeneration(state.result?.ragMetadata?.generation);
+    let recoveringChecklist;
+    if (conversation.conversationType === 'ASSISTANT' && state.codingAgent === true) {
+      try { recoveringChecklist = readCodingChecklist(state.result?.ragMetadata?.codingChecklist, state.id); } catch { /* Never fabricate a completed checklist. */ }
+    }
     if (['FAILED', 'CANCELLED'].includes(state.status)) {
-      if (!recoveringFile) return; // No original request is exposed, so ordinary failures cannot be resent here.
-      reply.ragMetadata = { generation: recoveringFile };
+      if (!recoveringFile && !recoveringChecklist) return; // No original request is exposed, so ordinary failures cannot be resent here.
+      reply.ragMetadata = { ...(recoveringFile ? { generation: recoveringFile } : {}), ...(recoveringChecklist ? { codingChecklist: recoveringChecklist } : {}) };
       reply.localAttempt = true;
       reply.failure = { message: failureMessageFor(state), elapsedMs: typeof state.progress?.elapsedMs === 'number' && Number.isFinite(state.progress.elapsedMs)
         ? Math.max(0, state.progress.elapsedMs) : 0, cancelled: state.status === 'CANCELLED', retryable: false };
@@ -257,7 +272,7 @@ export const useChatStore = defineStore('chat', () => {
     const controller = new AbortController(); reply.pending = true;
     const waitingApproval=state.status==='WAITING_APPROVAL';
     if(waitingApproval){reply.pending=false;reply.waitingApproval=true;approvalRevision.value++;}
-    conversationRuns.value[cid] = { controller, epoch, runId: state.id, reply,waitingApproval };
+    conversationRuns.value[cid] = { controller, epoch, runId: state.id, reply,waitingApproval, codingAgent: state.codingAgent === true };
     const active = conversationRuns.value[cid];
     messages.value.push(active.reply!);
     if(!waitingApproval)void watchRecoveredRun(cid, active);
@@ -380,6 +395,8 @@ export const useChatStore = defineStore('chat', () => {
         ...(attachments?.files.length || resumeFile ? { ragMetadata: {
           ...(attachments?.files.length ? { messageAttachments: attachments.files } : {}), ...(resumeFile ? { resumeFile } : {}) } } : {}) };
       const responseOptions = conversationResponseOptions(getConversationSettings(cid), conversation.conversationType);
+      const codingOptions = conversationCodingSkills(getConversationSettings(cid), conversation.conversationType, enabledSkills, !!resumeFile);
+      runtime.codingAgent = codingOptions.codingAgent === true;
       runtime.reply = { id: -Date.now() - 1, role: 'assistant', content: '', pending: true,
         conversationId: cid, createdAt: new Date().toISOString(), ragMetadata: { responseOptions } };
       questionMessage = runtime.question; reply = runtime.reply;
@@ -387,6 +404,7 @@ export const useChatStore = defineStore('chat', () => {
       // Admit once; subscribe/reconnect to the durable run without repeating model calls.
       const run = await request.post<Run>('/chat/runs', { requestId: crypto.randomUUID(),
         conversationId: cid, question: visibleQuestion, mode, enabledSkills: enabledSkills?.filter(skill => skill !== 'web_search'),
+        ...codingOptions,
         ...(resumeFile ? { resumeFile } : {}),
         ...responseOptions, codingWorkspaceId, persona: persona || undefined,
         attachments:attachments?.files.length?attachments.files.map(chatFileRef):undefined,
@@ -485,5 +503,6 @@ export const useChatStore = defineStore('chat', () => {
     navigation, drafts, draftAttachments, failedAttempts, dismissFailedAttempt, isLoadingConversation, initializeNavigation, setSpace, saveView,
     getConversationSettings, saveConversationSettings, selectedModelId, loadConversations, loadDefaultConfig,
     createConversation, configureIdentity, clearSelection, updateConversation, deleteConversation, deleteMessage, selectConversation,
-    sendMessage, sendMessageAgent, sendConfigured: send, stopGeneration, abortController, isConversationStreaming,isConversationAwaitingApproval, resetForUser };
+    sendMessage, sendMessageAgent, sendConfigured: send, stopGeneration, abortController, isConversationStreaming,isConversationAwaitingApproval,
+    codingChecklistRunIdForMessage, resetForUser };
 }, { persist: { key: 'chatforum-chat', storage: localStorage, paths: ['conversationSettings', 'preferredModelId'] } });

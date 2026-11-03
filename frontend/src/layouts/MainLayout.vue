@@ -119,6 +119,10 @@ const handleSelect = (key: string) => {
 
 const handleLogout = async () => {
   const session = userStore.getAuthSession();
+  const clearedOriginalSession = () => {
+    const current = userStore.getAuthSession();
+    return current.userId === null && current.epoch === session.epoch + 1 && !userStore.user && !userStore.token;
+  };
   try {
     await ElMessageBox.confirm('确定要退出登录吗?', '提示', {
       confirmButtonText: '确定',
@@ -127,15 +131,17 @@ const handleLogout = async () => {
     });
     const current = userStore.getAuthSession();
     if (current.userId !== session.userId || current.epoch !== session.epoch) return;
-    await userStore.logout();
-    if (userStore.user || userStore.token) return;
-    ElMessage.success('已退出登录');
+    const result = await userStore.logout();
+    if (!clearedOriginalSession()) return;
+    if (result.revokedAllSessions) ElMessage.success('已退出登录');
+    else ElMessage.warning('已退出本机登录，服务器未确认会话撤销');
     router.push('/login');
   } catch (err: any) {
     if (err?.code === 'AUTH_SESSION_CHANGED' || userStore.user?.id !== session.userId && userStore.user) return;
     if (err !== 'cancel' && err?.message !== 'cancel') {
       // The store only clears the original session; a late logout never signs out a new account.
-      if (userStore.user || userStore.token) return;
+      if (!clearedOriginalSession()) return;
+      ElMessage.warning('已退出本机登录，服务器未确认会话撤销');
       router.push('/login');
     }
   }

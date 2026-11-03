@@ -25,6 +25,9 @@ const {recoverChatDraft,sameDraftFiles,sameDraftSession}=recoveryModule.exports;
 const fileResumeModule={exports:{}};
 new Function('module','exports',ts.transpileModule(readFileSync(join(__dirname,'../src/utils/file-resume.ts'),'utf8'),{
  compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(fileResumeModule,fileResumeModule.exports);
+const checklistModule={exports:{}};
+new Function('module','exports',ts.transpileModule(readFileSync(join(__dirname,'../src/utils/coding-checklist.ts'),'utf8'),{
+ compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(checklistModule,checklistModule.exports);
 const resumePointer={draftId:'39411c9b-62be-44da-b3bc-1eac374f3925',revision:2,hash:'a'.repeat(64)};
 const roleplayDefaultsModule={exports:{}};
 new Function('module','exports',ts.transpileModule(readFileSync(join(__dirname,'../src/utils/roleplay-defaults.ts'),'utf8'),{
@@ -105,7 +108,7 @@ function chatRecoveryFixture({acceptImmediately=true,knowledgeBaseId=0,perConver
    '@/utils/api':{publicAsset:path=>path,CONNECTION_SETTINGS_ENABLED:false},'@/utils/chat-navigation':navigationModule.exports,
    '@/utils/chat-draft-recovery':recoveryModule.exports,'@/utils/chat-files':load(request),
    '@/utils/roleplay-defaults':roleplayDefaultsModule.exports,'@/utils/file-resume':fileResumeModule.exports,
-   '@/utils/forum-links':{},marked:{marked:{}},dompurify:{},dayjs:()=>({format:()=>''}),
+   '@/utils/forum-links':{},'@/utils/safe-markdown':{},dayjs:()=>({format:()=>''}),
   };
   const script=readFileSync(join(__dirname,'../src/views/Chat.vue'),'utf8').match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1];
   const code=ts.transpileModule(script+'\nexport {handleSendMessage,retryFailedAnswer,continueAnswer,inputText,uploadingFiles,sendingLocks,failureHeading,failureDescription};',{
@@ -345,7 +348,7 @@ function durableStoreFixture({createWait,admitError}={}){
   '@/utils/chat-stream':{watchChatRun:(id,signal,onDelta,onProgress)=>{const wait=deferred();waiters.push({...wait,id,signal,onDelta,onProgress});return wait.promise;}},
   '@/utils/local-workspace':{disconnectLocalWorkspace(){}},'@/utils/chat-navigation':navigationModule.exports,
   '@/utils/chat-files':load(request),'@/utils/chat-model-selection':{selectedChatModel:()=> 'fixture-model'},
-  '@/utils/roleplay-defaults':roleplayDefaultsModule.exports,'@/utils/file-resume':fileResumeModule.exports};
+  '@/utils/roleplay-defaults':roleplayDefaultsModule.exports,'@/utils/file-resume':fileResumeModule.exports,'@/utils/coding-checklist':checklistModule.exports};
  const mod={exports:{}},code=ts.transpileModule(readFileSync(join(__dirname,'../src/stores/chat.ts'),'utf8'),{
   compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;
  new Function('require','module','exports','localStorage','sessionStorage',code)(name=>{
