@@ -189,7 +189,7 @@
                   <el-button size="small" text :disabled="chatStore.isStreaming" @click="chatStore.dismissFailedAttempt(msg.conversationId)">移除</el-button>
                 </div>
               </div>
-              <div v-else-if="msg.content || msg.role!=='user'" class="message-bubble" :class="[msg.role, { 'thinking-bubble': msg.pending && !msg.content }]">
+              <div v-else-if="(msg.content || msg.role!=='user') && !(isAssistant && !msg.content && (msg.pending || msg.waitingApproval))" class="message-bubble" :class="[msg.role, { 'thinking-bubble': msg.pending && !msg.content }]">
                 <span v-if="msg.waitingApproval" class="approval-waiting" role="status">等待操作确认</span>
                 <span v-else-if="msg.pending && !msg.content" class="typing-indicator" role="status" aria-label="正在思考"><span></span><span></span><span></span></span>
                 <template v-else>
@@ -211,11 +211,10 @@
               </div>
               <ToolApprovals v-if="isAssistant && msg.waitingApproval" :conversation-id="msg.conversationId"
                 :revision="chatStore.approvalRevision" @changed="chatStore.onToolApprovalChanged" />
-              <CodingChecklist v-if="isAssistant && msg.role === 'assistant' && (msg.ragMetadata?.codingChecklist || codingChecklistRunId(msg))"
-                :conversation-id="msg.conversationId" :run-id="codingChecklistRunId(msg)" :initial="msg.ragMetadata?.codingChecklist"
-                :active="!!msg.pending || !!msg.waitingApproval" />
-              <GenerationStatus v-if="msg.role === 'assistant' && !msg.failure && !msg.waitingApproval" :pending="msg.pending" :busy="chatStore.isStreaming"
+              <GenerationStatus v-if="msg.role === 'assistant' && (!msg.failure || isAssistant && (msg.ragMetadata?.agentWork || msg.ragMetadata?.codingChecklist))" :pending="!!msg.pending || !!msg.waitingApproval" :busy="chatStore.isStreaming"
                 :progress="msg.ragMetadata?.performance" :generation="isAssistant ? msg.ragMetadata?.generation : undefined"
+                :run-id="messageRunId(msg)" :agent-work="isAssistant ? msg.ragMetadata?.agentWork : undefined"
+                :coding-checklist="isAssistant ? msg.ragMetadata?.codingChecklist : undefined" :hide-elapsed="!!msg.failure"
                 :allow-thinking="isAssistant" @continue="continueAnswer(msg)" />
               <div
                 v-if="msg.content && !msg.pending && !msg.localAttempt"
@@ -350,7 +349,6 @@ import WebSearchSources from '@/components/WebSearchSources.vue';
 import AssistantComposer from '@/components/AssistantComposer.vue';
 import CodeWorkspace from '@/components/CodeWorkspace.vue';
 import CodingSkillPreferences from '@/components/CodingSkillPreferences.vue';
-import CodingChecklist from '@/components/CodingChecklist.vue';
 import FileArtifacts from '@/components/FileArtifacts.vue';
 import MessageAttachments from '@/components/MessageAttachments.vue';
 import GenerationStatus from '@/components/GenerationStatus.vue';
@@ -452,9 +450,9 @@ const messageIdentity = (msg: any) => {
   const key = msg.ragMetadata?.personaKey;
   return key === 'assistant' ? 'AI 助手' : personaMap[key]?.name || (isLegacy.value ? '历史助理' : aiDisplayName.value);
 };
-const codingChecklistRunId = (msg: any) => {
-  return isAssistant.value && (msg.pending || msg.waitingApproval)
-    ? chatStore.codingChecklistRunIdForMessage(msg.conversationId, msg.id) : undefined;
+const messageRunId = (msg: any) => {
+  return isAssistant.value ? chatStore.workRunIdForMessage(msg.conversationId, msg.id) ||
+    msg.ragMetadata?.agentWork?.runId || msg.ragMetadata?.codingChecklist?.runId : undefined;
 };
 
 // Mode & persona settings, persisted per-conversation via chat store
@@ -564,7 +562,7 @@ const selectedKnowledgeIssue = computed(() => {
 });
 
 const toolSkills = computed(() => {
-  return skills.value.filter(s => s.category !== '角色扮演' && s.name !== 'code_workspace' && s.name !== 'web_search' && s.name !== 'load_coding_skill' && s.name !== 'coding_checklist');
+  return skills.value.filter(s => s.category !== '角色扮演' && s.name !== 'code_workspace' && s.name !== 'web_search' && s.name !== 'load_coding_skill' && s.name !== 'coding_checklist' && s.name !== 'task_plan');
 });
 const codingEnabled = computed({
   get: () => chatStore.currentConversation ? !!chatStore.getConversationSettings(chatStore.currentConversation.id).codingEnabled : draftCoding.value,
@@ -962,7 +960,7 @@ const handleSendMessage = async (resumeInput?: unknown) => {
         personaLabel: customPersonaName.value, customPersonaPrompt: systemPrompt });
     if (chatStore.currentConversation?.id !== sendingConversationId) throw new Error('会话已切换，请在原会话重新发送');
     const skills = [
-      ...(agentMode.value === 'agent' ? enabledSkills.value.filter(s => s !== 'code_workspace' && s !== 'web_search' && s !== 'load_coding_skill' && s !== 'coding_checklist') : []),
+      ...(agentMode.value === 'agent' ? enabledSkills.value.filter(s => s !== 'code_workspace' && s !== 'web_search' && s !== 'load_coding_skill' && s !== 'coding_checklist' && s !== 'task_plan') : []),
       ...(isAssistant.value && (codingEnabled.value || sendingFiles.length) ? ['code_workspace'] : []),
     ];
     const kbId = selectedKnowledgeBaseId.value > 0 ? selectedKnowledgeBaseId.value : undefined;
@@ -1055,7 +1053,7 @@ const loadSkills = async () => {
     const data = await request.get<any[]>('/chat/skills');
     skills.value = data;
     // Only auto-enable tool skills, not persona skills
-    enabledSkills.value = data.filter(s => s.enabled && s.category !== '角色扮演' && s.name !== 'code_workspace' && s.name !== 'web_search' && s.name !== 'load_coding_skill' && s.name !== 'coding_checklist').map(s => s.name);
+    enabledSkills.value = data.filter(s => s.enabled && s.category !== '角色扮演' && s.name !== 'code_workspace' && s.name !== 'web_search' && s.name !== 'load_coding_skill' && s.name !== 'coding_checklist' && s.name !== 'task_plan').map(s => s.name);
   } catch {
     // Ignore
   }

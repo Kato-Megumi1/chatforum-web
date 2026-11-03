@@ -2,10 +2,11 @@ import { apiUrl } from './api';
 import request from './request';
 import { useUserStore } from '@/stores/user';
 import { readSse } from './sse';
+import { readAgentWork, type AgentWork } from './agent-work';
 
-export interface RunResult { status: string; error?: string; result?: { content: string; ragMetadata?: any } }
+export interface RunResult { status: string; error?: string; work?: AgentWork; result?: { content: string; ragMetadata?: any } }
 export type GenerationPhase = 'queued' | 'context' | 'understanding' | 'retrieving' | 'evidence' | 'thinking' | 'generating' | 'tools' | 'verifying' | 'delivering' | 'completed';
-export type GenerationActivity = 'web_search' | 'forum_search' | 'read_files' | 'save_file' | 'preview_html' | 'review_html' | 'repair_html';
+export type GenerationActivity = 'web_search' | 'forum_search' | 'read_files' | 'save_file' | 'preview_html' | 'review_html' | 'repair_html' | 'plan_task' | 'update_plan' | 'load_skill' | 'check_file';
 export interface GenerationProgress { stage: 'preparing' | 'generating' | 'tools' | 'verifying' | 'completed';
   elapsedMs: number; firstTokenMs: number | null; stages: Array<{ stage: string; durationMs: number }>;
   phase?: GenerationPhase; phaseElapsedMs?: number; queueMs?: number; modelCalls?: number; activeModelCalls?: number;
@@ -13,7 +14,7 @@ export interface GenerationProgress { stage: 'preparing' | 'generating' | 'tools
   activity?: GenerationActivity; modelOutput?: { thinkingChars: number; textChars: number; toolChars: number; lastDataElapsedMs: number } }
 const stages = ['preparing', 'generating', 'tools', 'verifying', 'completed'] as const;
 const phases: GenerationPhase[] = ['queued', 'context', 'understanding', 'retrieving', 'evidence', 'thinking', 'generating', 'tools', 'verifying', 'delivering', 'completed'];
-const activities: GenerationActivity[] = ['web_search', 'forum_search', 'read_files', 'save_file', 'preview_html', 'review_html', 'repair_html'];
+const activities: GenerationActivity[] = ['web_search', 'forum_search', 'read_files', 'save_file', 'preview_html', 'review_html', 'repair_html', 'plan_task', 'update_plan', 'load_skill', 'check_file'];
 const time = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER;
 const count = (value: unknown): value is number => time(value) && Number.isSafeInteger(value);
 const object = (value: unknown): value is Record<string, any> => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -44,7 +45,7 @@ export function parseGenerationProgress(value: unknown): GenerationProgress | nu
 class StreamAccessError extends Error {}
 
 export async function watchChatRun(id: string, signal: AbortSignal,
-  onDelta: (text: string) => void, onProgress?: (progress: GenerationProgress) => void): Promise<RunResult> {
+  onDelta: (text: string) => void, onProgress?: (progress: GenerationProgress) => void, onWork?: (work: AgentWork) => void): Promise<RunResult> {
   let offset = 0, failures = 0;
   while (!signal.aborted) {
     const connection = new AbortController();
@@ -76,7 +77,14 @@ export async function watchChatRun(id: string, signal: AbortSignal,
         } else if (frame.event === 'progress') {
           const progress = parseGenerationProgress(value);
           if (progress) onProgress?.(progress);
-        } else if (frame.event === 'complete' || frame.event === 'terminal') return value;
+        } else if (frame.event === 'work') {
+          const work = readAgentWork(value, id);
+          if (work) onWork?.(work);
+        } else if (frame.event === 'complete' || frame.event === 'terminal') {
+          const work = readAgentWork(value.work ?? value.result?.ragMetadata?.agentWork, id);
+          if (work) onWork?.(work);
+          return { ...value, work };
+        }
       }
       throw new Error('SSE disconnected');
     } catch (error) {

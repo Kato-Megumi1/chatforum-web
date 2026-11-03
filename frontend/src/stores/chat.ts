@@ -9,6 +9,7 @@ import { selectedChatModel } from '@/utils/chat-model-selection';
 import { conversationCodingSkills, conversationResponseOptions, ensureConversationSettings, type ConversationSettings } from '@/utils/roleplay-defaults';
 import { readFileResume, readRecoverableFileGeneration, type FileResumePointer } from '@/utils/file-resume';
 import { readCodingChecklist } from '@/utils/coding-checklist';
+import { readAgentWork, type AgentWork } from '@/utils/agent-work';
 
 interface Conversation { id: number; title: string; isPinned: boolean; userId: number; createdAt: string; updatedAt: string;
   conversationType: 'ASSISTANT' | 'ROLEPLAY' | 'LEGACY'; personaKey?: string; personaLabel?: string;
@@ -20,9 +21,21 @@ interface FailedAttempt { question?: Message; reply: Message; runId?: string }
 interface ConversationRun { controller: AbortController; epoch: number; runId?: string; waitingApproval?:boolean;
   question?: Message; reply?: Message; settled?: boolean; codingAgent?: boolean }
 interface ChatModel { id: string; label: string; available: boolean; unavailableReason: string | null }
-interface Run { id?: string; status: string; error?: string; createdAt?: string; codingAgent?: boolean; progress?: { elapsedMs?: number }; result?: { content?: string; ragMetadata?: any;
+interface Run { id?: string; status: string; error?: string; createdAt?: string; codingAgent?: boolean; work?: AgentWork; progress?: { elapsedMs?: number }; result?: { content?: string; ragMetadata?: any;
   failure?: { code?: string; message?: string } } }
 const failureMessageFor = (run: Run) => run.result?.failure?.message || run.error || '本次回答未生成，请重新发送';
+const retainAgentWork = (reply: Message | undefined, value: unknown, runId?: string) => {
+  const work = readAgentWork(value, runId);
+  if (reply && work) reply.ragMetadata = { ...reply.ragMetadata, agentWork: work,
+    ...(work.codingChecklist ? { codingChecklist: work.codingChecklist } : {}) };
+};
+const mergeResultMetadata = (reply: Message, run: Run, runId: string | undefined, assistant: boolean) => {
+  const { agentWork, ...metadata } = run.result?.ragMetadata || {};
+  const previousWork = reply.ragMetadata?.agentWork;
+  reply.ragMetadata = { ...reply.ragMetadata, ...(run.status === 'COMPLETED' ? metadata : {}) };
+  delete reply.ragMetadata.agentWork;
+  if (assistant) retainAgentWork(reply, run.work ?? agentWork ?? previousWork, runId);
+};
 const retainFailedFileRecovery = (reply: Message | undefined, run: Run) => {
   const generation = readRecoverableFileGeneration(run.result?.ragMetadata?.generation);
   if (reply && generation) reply.ragMetadata = { ...reply.ragMetadata, generation };
@@ -54,6 +67,12 @@ export const useChatStore = defineStore('chat', () => {
   const abortController = computed(() => currentRun.value?.controller || null);
   const isConversationStreaming = (id: number) => !!conversationRuns.value[id];
   const isConversationAwaitingApproval=(id:number)=>conversationRuns.value[id]?.waitingApproval===true;
+  const assistantConversation = (cid: number) => (currentConversation.value?.id === cid
+    ? currentConversation.value : conversations.value.find(item => item.id === cid))?.conversationType === 'ASSISTANT';
+  const workRunIdForMessage = (cid: number, messageId: number) => {
+    const runtime = conversationRuns.value[cid];
+    return assistantConversation(cid) && runtime?.reply?.id === messageId ? runtime.runId : undefined;
+  };
   const codingChecklistRunIdForMessage = (cid: number, messageId: number) => {
     const runtime = conversationRuns.value[cid];
     const conversation = currentConversation.value?.id === cid ? currentConversation.value : conversations.value.find(item => item.id === cid);
@@ -252,15 +271,17 @@ export const useChatStore = defineStore('chat', () => {
       return;
     }
     const reply: Message = { id: -Date.now()-1, role: 'assistant', content: '', conversationId: cid,
-      createdAt: state.createdAt || new Date().toISOString() };
+      createdAt: state.createdAt || new Date().toISOString(), ...(state.progress ? { ragMetadata: { performance: state.progress } } : {}) };
+    const recoveringWork = conversation.conversationType === 'ASSISTANT' ? readAgentWork(state.work ?? state.result?.ragMetadata?.agentWork, state.id) : undefined;
+    if (recoveringWork) retainAgentWork(reply, recoveringWork, state.id);
     const recoveringFile = conversation.conversationType === 'ASSISTANT' && readRecoverableFileGeneration(state.result?.ragMetadata?.generation);
     let recoveringChecklist;
     if (conversation.conversationType === 'ASSISTANT' && state.codingAgent === true) {
       try { recoveringChecklist = readCodingChecklist(state.result?.ragMetadata?.codingChecklist, state.id); } catch { /* Never fabricate a completed checklist. */ }
     }
     if (['FAILED', 'CANCELLED'].includes(state.status)) {
-      if (!recoveringFile && !recoveringChecklist) return; // No original request is exposed, so ordinary failures cannot be resent here.
-      reply.ragMetadata = { ...(recoveringFile ? { generation: recoveringFile } : {}), ...(recoveringChecklist ? { codingChecklist: recoveringChecklist } : {}) };
+      if (!recoveringFile && !recoveringChecklist && !recoveringWork) return; // No original request is exposed, so ordinary failures cannot be resent here.
+      reply.ragMetadata = { ...reply.ragMetadata, ...(recoveringFile ? { generation: recoveringFile } : {}), ...(recoveringChecklist ? { codingChecklist: recoveringChecklist } : {}) };
       reply.localAttempt = true;
       reply.failure = { message: failureMessageFor(state), elapsedMs: typeof state.progress?.elapsedMs === 'number' && Number.isFinite(state.progress.elapsedMs)
         ? Math.max(0, state.progress.elapsedMs) : 0, cancelled: state.status === 'CANCELLED', retryable: false };
@@ -283,13 +304,15 @@ export const useChatStore = defineStore('chat', () => {
     try {
       state = await watchChatRun(active.runId!, active.controller.signal,
         text => { if (owns() && active.reply) active.reply.content += text; },
-        progress => { if (owns() && active.reply) active.reply.ragMetadata = { ...active.reply.ragMetadata, performance: progress }; });
+        progress => { if (owns() && active.reply) active.reply.ragMetadata = { ...active.reply.ragMetadata, performance: progress }; },
+        work => { if (owns() && assistantConversation(cid)) retainAgentWork(active.reply, work, active.runId); });
     } catch {
       if (owns()) {
         try { state = await request.get<Run>('/chat/runs/' + active.runId); } catch { /* Unknown tasks are not automatically retried. */ }
       }
     } finally {
       if (owns()) {
+        if (state && active.reply) mergeResultMetadata(active.reply, state, active.runId, assistantConversation(cid));
         if(state?.status==='WAITING_APPROVAL'){
           active.waitingApproval=true;active.settled=false;active.reply!.content='';active.reply!.pending=false;active.reply!.waitingApproval=true;approvalRevision.value++;return;
         }
@@ -416,12 +439,13 @@ export const useChatStore = defineStore('chat', () => {
       if (controller.signal.aborted) { await request.delete('/chat/runs/' + run.id); return false; }
       const status: Run = await watchChatRun(run.id, controller.signal, text => {
         if (ownsAttempt() && reply) { reply.content += text; onStream?.(text); }
-      }, progress => { if (ownsAttempt() && reply) reply.ragMetadata = { ...reply.ragMetadata, performance: progress }; });
+      }, progress => { if (ownsAttempt() && reply) reply.ragMetadata = { ...reply.ragMetadata, performance: progress }; },
+      work => { if (ownsAttempt() && conversation?.conversationType === 'ASSISTANT') retainAgentWork(reply, work, run.id); });
       if (!ownsAttempt()) return false;
+      if (reply) mergeResultMetadata(reply, status, run.id, conversation.conversationType === 'ASSISTANT');
       if (status.status === 'COMPLETED') {
         completed=true;
         reply.content = status.result?.content || reply.content;
-        reply.ragMetadata = status.result?.ragMetadata;
       } else if(status.status==='WAITING_APPROVAL') {
         waitingApproval=true;
       } else {
@@ -439,9 +463,9 @@ export const useChatStore = defineStore('chat', () => {
         retryable = false;
         try {
           const state = await request.get<Run>('/chat/runs/' + runId);
+          if (reply) mergeResultMetadata(reply, state, runId, !!cid && assistantConversation(cid));
           if (state.status === 'COMPLETED' && reply) {
             completed = true; reply.content = state.result?.content || reply.content;
-            reply.ragMetadata = state.result?.ragMetadata;
           } else if(state.status==='WAITING_APPROVAL') {
             waitingApproval=true;
           } else if (state.status === 'FAILED' || state.status === 'CANCELLED') {
@@ -504,5 +528,5 @@ export const useChatStore = defineStore('chat', () => {
     getConversationSettings, saveConversationSettings, selectedModelId, loadConversations, loadDefaultConfig,
     createConversation, configureIdentity, clearSelection, updateConversation, deleteConversation, deleteMessage, selectConversation,
     sendMessage, sendMessageAgent, sendConfigured: send, stopGeneration, abortController, isConversationStreaming,isConversationAwaitingApproval,
-    codingChecklistRunIdForMessage, resetForUser };
+    codingChecklistRunIdForMessage, workRunIdForMessage, resetForUser };
 }, { persist: { key: 'chatforum-chat', storage: localStorage, paths: ['conversationSettings', 'preferredModelId'] } });

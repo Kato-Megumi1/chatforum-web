@@ -28,6 +28,9 @@ new Function('module','exports',ts.transpileModule(readFileSync(join(__dirname,'
 const checklistModule={exports:{}};
 new Function('module','exports',ts.transpileModule(readFileSync(join(__dirname,'../src/utils/coding-checklist.ts'),'utf8'),{
  compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(checklistModule,checklistModule.exports);
+const workModule={exports:{}};
+new Function('require','module','exports',ts.transpileModule(readFileSync(join(__dirname,'../src/utils/agent-work.ts'),'utf8'),{
+ compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(name=>name==='./coding-checklist'?checklistModule.exports:undefined,workModule,workModule.exports);
 const resumePointer={draftId:'39411c9b-62be-44da-b3bc-1eac374f3925',revision:2,hash:'a'.repeat(64)};
 const roleplayDefaultsModule={exports:{}};
 new Function('module','exports',ts.transpileModule(readFileSync(join(__dirname,'../src/utils/roleplay-defaults.ts'),'utf8'),{
@@ -348,7 +351,7 @@ function durableStoreFixture({createWait,admitError}={}){
   '@/utils/chat-stream':{watchChatRun:(id,signal,onDelta,onProgress)=>{const wait=deferred();waiters.push({...wait,id,signal,onDelta,onProgress});return wait.promise;}},
   '@/utils/local-workspace':{disconnectLocalWorkspace(){}},'@/utils/chat-navigation':navigationModule.exports,
   '@/utils/chat-files':load(request),'@/utils/chat-model-selection':{selectedChatModel:()=> 'fixture-model'},
-  '@/utils/roleplay-defaults':roleplayDefaultsModule.exports,'@/utils/file-resume':fileResumeModule.exports,'@/utils/coding-checklist':checklistModule.exports};
+  '@/utils/roleplay-defaults':roleplayDefaultsModule.exports,'@/utils/file-resume':fileResumeModule.exports,'@/utils/coding-checklist':checklistModule.exports,'@/utils/agent-work':workModule.exports};
  const mod={exports:{}},code=ts.transpileModule(readFileSync(join(__dirname,'../src/stores/chat.ts'),'utf8'),{
   compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;
  new Function('require','module','exports','localStorage','sessionStorage',code)(name=>{

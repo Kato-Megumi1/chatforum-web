@@ -4,6 +4,7 @@ const activityDescriptions: Record<string, string> = {
   web_search: '正在搜索网页并整理来源', forum_search: '正在查询社区帖子', read_files: '正在读取本次会话中的文件',
   save_file: '正在保存生成的文件', preview_html: '正在生成手机和桌面的页面预览',
   review_html: '正在检查页面预览中的布局和画面', repair_html: '正在修复预览发现的页面问题',
+  plan_task: '正在制定计划', update_plan: '正在更新计划', load_skill: '正在读取技能', check_file: '正在检查语法',
 };
 const phaseDefinitions = {
   queued: { label: '等待开始', description: '请求已提交，正在等待处理' },

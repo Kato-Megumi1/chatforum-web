@@ -12,6 +12,7 @@ function loadFile(path, dependencies = {}) {
 }
 const defaults = loadFile('utils/roleplay-defaults.ts'), catalogPolicy = loadFile('utils/coding-skills.ts');
 const checklistPolicy = loadFile('utils/coding-checklist.ts');
+const workPolicy = loadFile('utils/agent-work.ts', { './coding-checklist': checklistPolicy });
 const skill = (name = 'frontend-design') => ({ name, title: '前端设计', description: '制作具有清晰层次的界面。', hash: 'a'.repeat(64),
   sourceUrl: `https://github.com/anthropics/skills/blob/${'b'.repeat(40)}/skills/${name}/SKILL.md`, license: 'Apache-2.0', version: '1.0.0' });
 
@@ -39,11 +40,11 @@ test('auto, custom and off serialize only workflow IDs, separately from tool per
   assert.deepEqual(defaults.conversationCodingSkills({ ...options, codingSkillMode: 'off' }, 'ASSISTANT', ['code_workspace'], true), {});
 });
 
-function storeFixture() {
+function storeFixture(options={}) {
   const sent = [], conversation = { id: 11, userId: 7, title: 'Synthetic', conversationType: 'ASSISTANT', personaKey: 'assistant' };
   let get = async () => [];
   const request = { get: (...args) => get(...args), async post(path, body) {
-    if (path === '/chat/runs') { sent.push(body); return { id: 'synthetic-run' }; } return conversation;
+    if (path === '/chat/runs') { sent.push(body); return { id: options.runId || 'synthetic-run' }; } return conversation;
   }, async delete() {} };
   let watchRun = async () => ({ status: 'COMPLETED', result: { content: 'Synthetic answer', ragMetadata: {} } });
   const module = loadFile('stores/chat.ts', { pinia, vue, '@/utils/request': { default: request },
@@ -51,7 +52,7 @@ function storeFixture() {
     '@/utils/local-workspace': { disconnectLocalWorkspace() {} }, '@/utils/chat-navigation': loadFile('utils/chat-navigation.ts'),
     '@/utils/chat-files': { chatFileRef: file => ({ id: file.id, kind: file.kind, revision: file.revision }) },
     '@/utils/chat-model-selection': { selectedChatModel: () => 'qwen3.8-max' }, '@/utils/roleplay-defaults': defaults,
-    '@/utils/file-resume': loadFile('utils/file-resume.ts'), '@/utils/coding-checklist': checklistPolicy });
+    '@/utils/file-resume': loadFile('utils/file-resume.ts'), '@/utils/coding-checklist': checklistPolicy, '@/utils/agent-work': workPolicy });
   pinia.setActivePinia(pinia.createPinia()); const store = module.useChatStore(); store.currentConversation = conversation;
   return { store, sent, conversation, watch(handler) { watchRun = handler; }, read(handler) { get = handler; } };
 }
@@ -174,7 +175,7 @@ test('internal skill/checklist tools cannot appear, default-enable or toggle thr
   const load = source.match(/const loadSkills = async \(\) => \{[\s\S]*?(?=const loadKnowledgeBases = async)/)[0];
   const toggle = source.match(/const toggleAllSkills = \(\) => \{[\s\S]*?\n};/)[0];
   const skills = vue.ref([]), enabledSkills = vue.ref([]), mod = { exports: {} };
-  const data = ['load_coding_skill', 'coding_checklist', 'code_workspace', 'web_search', 'calculator'].map(name => ({ name, enabled: true, category: name === 'calculator' ? '实用工具' : '编程内部' }));
+  const data = ['load_coding_skill', 'coding_checklist', 'task_plan', 'code_workspace', 'web_search', 'calculator'].map(name => ({ name, enabled: true, category: name === 'calculator' ? '实用工具' : '编程内部' }));
   new Function('module', 'exports', 'computed', 'skills', 'enabledSkills', 'request', compile(compute + load + toggle + '\nexport {toolSkills, loadSkills, toggleAllSkills};'))(
     mod, mod.exports, vue.computed, skills, enabledSkills, { get: async () => data });
   await mod.exports.loadSkills();
@@ -193,7 +194,7 @@ function checklistFixture(overrides = {}) {
   const source = readFileSync(join(__dirname, '../src/components/CodingChecklist.vue'), 'utf8');
   const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1], scope = vue.effectScope(), mod = { exports: {} };
   scope.run(() => new Function('module', 'exports', 'require', 'defineProps', 'setTimeout', 'clearTimeout',
-    compile(script + '\nexport { snapshot, items, completed, loading, error, load, ownsSession, itemState };'))(mod, mod.exports,
+    compile(script + '\nexport { snapshot, items, completed, ownsSession, itemState };'))(mod, mod.exports,
       name => ({ vue: { ...vue, onUnmounted: callback => unmount.push(callback) }, '@/utils/request': { default: request },
         '@/stores/user': { useUserStore: () => user }, '@/utils/coding-checklist': checklistPolicy }[name]), () => props,
       callback => { timers.add(callback); return callback; }, timer => timers.delete(timer)));
@@ -220,38 +221,36 @@ test('checklist metadata is bounded and cannot synthesize completed state from u
   finally { f.close(); }
 });
 
-test('live checklist reads only its exact run and preserves server-reported pending/blocked state', async () => {
+test('live checklist follows pushed snapshots during execution without polling a missing plan', async () => {
   const f = checklistFixture();
   try {
-    assert.equal(f.completed.value, 0); assert.equal(f.calls[0].path, '/coding/11/checklist');
-    assert.deepEqual(f.calls[0].options.params, { runId: f.props.runId });
-    f.pending[0].resolve(checklist('blocked')); await flush();
-    assert.equal(f.items.value[0].status, 'blocked'); assert.equal(f.completed.value, 0); assert.equal(f.timers.size, 1);
+    assert.equal(f.completed.value, 0); assert.equal(f.calls.length, 0);
+    f.props.initial=checklist('blocked'); await flush();
+    assert.equal(f.items.value[0].status, 'blocked'); assert.equal(f.completed.value, 0); assert.equal(f.timers.size, 0);
     f.props.initial = checklist('blocked'); f.props.active = false; await flush();
     assert.equal(f.items.value[0].status, 'blocked'); assert.equal(f.completed.value, 0); assert.equal(f.timers.size, 0);
-    assert.equal(f.calls.length, 1, 'run completion does not trigger work or infer checklist completion');
+    assert.equal(f.calls.length, 0, 'run completion does not trigger work or infer checklist completion');
   } finally { f.close(); }
 });
 
-test('account, run, and unmount boundaries reject late live checklists and stop polling', async () => {
+test('account, run, and unmount boundaries reject unrelated checklist snapshots', async () => {
   const f = checklistFixture();
   try {
-    f.props.runId = '20000000-0000-4000-8000-000000000002'; assert(f.calls[0].options.signal.aborted);
-    f.pending[0].resolve(checklist('done')); await flush(); assert.equal(f.completed.value, 0);
-    f.user.epoch++; assert(f.calls[1].options.signal.aborted); f.pending[1].resolve(checklist('done')); await flush();
+    f.props.initial={...checklist('done'),runId:f.props.runId};
+    f.props.runId = '20000000-0000-4000-8000-000000000002'; await flush(); assert.equal(f.completed.value, 0);
+    f.user.epoch++; f.props.initial=checklist('done'); await flush();
     assert.equal(f.ownsSession(), false); assert.equal(f.completed.value, 0); assert.equal(f.timers.size, 0);
   } finally { f.close(); }
-  const gone = checklistFixture(); gone.close(); assert(gone.calls[0].options.signal.aborted);
-  gone.pending[0].resolve(checklist('done')); await flush(); assert.equal(gone.completed.value, 0); assert.equal(gone.timers.size, 0);
+  const gone = checklistFixture(); gone.close();
+  gone.props.initial=checklist('done'); await flush(); assert.equal(gone.completed.value, 0); assert.equal(gone.timers.size, 0);
 });
 
-test('checklist transport failure is explicit and retries without clearing the last reported items', async () => {
-  const f = checklistFixture();
+test('an empty checklist stays absent and real completion requires a later valid snapshot', async () => {
+  const f = checklistFixture({initial:undefined});
   try {
-    f.pending[0].reject(Error('synthetic network failure')); await flush();
-    assert.equal(f.error.value, '清单暂时无法更新'); assert.equal(f.items.value[0].status, 'pending');
-    const retry = f.load(); f.pending[1].resolve(checklist('done')); await retry;
-    assert.equal(f.completed.value, 1); assert.equal(f.error.value, ''); assert.equal(f.timers.size, 1);
+    assert.equal(f.items.value.length,0);assert.equal(f.calls.length,0);assert.equal(f.timers.size,0);
+    f.props.initial=checklist('done'); await flush();
+    assert.equal(f.completed.value, 1); assert.equal(f.calls.length,0);assert.equal(f.timers.size,0);
   } finally { f.close(); }
 });
 
@@ -292,4 +291,36 @@ test('a failed live task keeps the last server checklist separately from its err
   assert.equal(f.store.failedAttempts[11].reply.ragMetadata.codingChecklist.items[0].status, 'blocked');
   assert.equal(f.store.failedAttempts[11].reply.failure.retryable, true);
   f.store.resetForUser();
+});
+
+const publicWork=runId=>({version:'agent-work-v1',runId,revision:'a'.repeat(64),activities:[],plan:{version:'agent-task-plan-v1',revision:1,readyForAnswer:false,
+ summary:'先核对公开资料，再整理方案。',items:[{id:'find',title:'核对资料',kind:'research',status:'done'},{id:'answer',title:'整理方案',kind:'deliver',status:'in_progress'}]}});
+test('ordinary non-coding Agent receives real work and preserves it when final metadata is otherwise empty',async()=>{
+ const runId='10000000-0000-4000-8000-000000000001',f=storeFixture({runId});let observed;
+ f.watch(async(_id,_signal,_delta,_progress,onWork)=>{onWork(publicWork(runId));observed=f.store.messages.at(-1);assert.equal(observed.ragMetadata.agentWork.plan.items[0].status,'done');
+  assert.equal(f.store.workRunIdForMessage(11,observed.id),runId);return{status:'COMPLETED',result:{content:'合成结果',ragMetadata:{}}};});
+ await f.store.sendConfigured('比较两种方案','agent',[]);
+ assert.equal(f.sent[0].codingAgent,undefined);assert.equal(observed.ragMetadata.agentWork.runId,runId);assert.equal(f.sent.length,1);f.store.resetForUser();
+});
+
+test('background work remains attached to its own conversation after switching the visible view',async()=>{
+ const runId='10000000-0000-4000-8000-000000000001',f=storeFixture({runId});let onWork,finish;
+ f.watch((_id,_signal,_delta,_progress,work)=>{onWork=work;return new Promise(resolve=>{finish=resolve;});});
+ const sending=f.store.sendConfigured('合成后台请求','agent',[]);await flush();const background=f.store.messages.at(-1);
+ f.store.currentConversation={...f.conversation,id:12};f.store.messages=[];onWork(publicWork(runId));
+ assert.equal(background.ragMetadata.agentWork.runId,runId);assert.equal(f.store.messages.length,0);assert.equal(f.store.workRunIdForMessage(12,background.id),undefined);
+ finish({status:'COMPLETED',result:{content:'后台合成结果',ragMetadata:{}}});await sending;assert.equal(f.store.messages.length,0);f.store.resetForUser();
+});
+test('refresh restores public work from the original run without requiring a saved coding preference',async()=>{
+ const runId='10000000-0000-4000-8000-000000000001',f=storeFixture();f.read(async path=>path.startsWith('/chat/runs/recovery?')?[{id:runId,status:'RUNNING',work:publicWork(runId),progress:{stage:'generating',elapsedMs:4000,stages:[]}}]:[]);
+ f.watch((_id,signal)=>new Promise(resolve=>signal.addEventListener('abort',()=>resolve({status:'CANCELLED'}),{once:true})));
+ try{await f.store.selectConversation(f.conversation);const reply=f.store.messages.at(-1);assert.equal(reply.ragMetadata.agentWork.plan.summary,'先核对公开资料，再整理方案。');assert.equal(reply.ragMetadata.performance.elapsedMs,4000);assert.equal(f.store.workRunIdForMessage(11,reply.id),runId);assert.equal(f.sent.length,0);}finally{f.store.resetForUser();}
+});
+test('work callbacks are rejected after account reset and roleplay never receives new work presentation data',async()=>{
+ const runId='10000000-0000-4000-8000-000000000001',f=storeFixture({runId});let onWork,finish;
+ f.watch((_id,_signal,_delta,_progress,work)=>{onWork=work;return new Promise(resolve=>{finish=resolve;});});
+ const sending=f.store.sendConfigured('合成请求','agent',[]);await flush();const reply=f.store.messages.at(-1);f.store.resetForUser();onWork(publicWork(runId));finish({status:'CANCELLED'});await sending;assert.equal(reply.ragMetadata.agentWork,undefined);assert.equal(f.store.messages.length,0);
+ const role=storeFixture({runId});role.store.currentConversation={...role.conversation,conversationType:'ROLEPLAY',personaKey:'kato_megumi_persona'};let roleReply;
+ role.watch(async(_id,_signal,_delta,_progress,work)=>{work(publicWork(runId));roleReply=role.store.messages.at(-1);return{status:'COMPLETED',work:publicWork(runId),result:{content:'合成角色台词',ragMetadata:{agentWork:publicWork(runId)}}};});
+ await role.store.sendConfigured('合成角色请求','agent',[],'kato_megumi_persona');assert.equal(roleReply.ragMetadata.agentWork,undefined);role.store.resetForUser();
 });

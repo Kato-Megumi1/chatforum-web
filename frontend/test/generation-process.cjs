@@ -10,6 +10,8 @@ const { generationProcessView, generationSeconds } = helperModule.exports;
 const fileResumeModule = { exports: {} };
 new Function('module', 'exports', compile(readFileSync(join(__dirname, '../src/utils/file-resume.ts'), 'utf8')))(fileResumeModule, fileResumeModule.exports);
 const resumePointer = { draftId: '39411c9b-62be-44da-b3bc-1eac374f3925', revision: 2, hash: 'a'.repeat(64) };
+function utility(file, dependencies={}) { const mod={exports:{}}; new Function('require','module','exports',compile(readFileSync(join(__dirname,'../src/utils/'+file+'.ts'),'utf8')))(name=>dependencies[name],mod,mod.exports); return mod.exports; }
+const codingPolicy=utility('coding-checklist'), workPolicy=utility('agent-work',{'./coding-checklist':codingPolicy});
 
 test('only received public phases, numeric timings and counts enter the process view', () => {
   const view = generationProcessView({ stage: 'generating', phase: 'retrieving', elapsedMs: 2000,
@@ -81,7 +83,8 @@ function componentFixture() {
   const props = vue.reactive({ pending: true, progress: undefined, busy: false, allowThinking: false });
   const mounts = [], unmounts = [], timers = new Map(); let clock = 10000, nextTimer = 0;
   const imports = { vue: { ...vue, onMounted: fn => mounts.push(fn), onUnmounted: fn => unmounts.push(fn) },
-    '@/utils/generation-process': helperModule.exports, '@/utils/file-resume': fileResumeModule.exports };
+    '@/utils/generation-process': helperModule.exports, '@/utils/file-resume': fileResumeModule.exports,
+    '@/utils/agent-work':workPolicy,'@/utils/coding-checklist':codingPolicy,'./CodingChecklist.vue':{} };
   const mod = { exports: {} }, scope = vue.effectScope();
   scope.run(() => new Function('require', 'module', 'exports', 'defineProps', 'defineEmits', 'Date', 'setInterval', 'clearInterval',
     compile(script + '\nexport { view, continuationLabel, resumeFile, statusLabel };'))(name => {
@@ -119,6 +122,16 @@ test('component releases its only timer on completion and unmount', async t => {
   f.unmount(); assert.equal(f.timers.size, 0);
 });
 
+test('duplicate/stale progress never resets elapsed, while a different run has its own clock',async t=>{
+ const f=componentFixture();t.after(f.unmount);f.mount();f.props.runId='10000000-0000-4000-8000-000000000001';
+ const progress={stage:'generating',phase:'thinking',elapsedMs:1000,firstTokenMs:null,stages:[]};f.props.progress=progress;await vue.nextTick();
+ f.advance(2000);assert.equal(f.view.value.elapsedMs,3000);
+ f.props.progress={...progress};await vue.nextTick();assert.equal(f.view.value.elapsedMs,3000);
+ f.advance(1000);f.props.progress={...progress,elapsedMs:500};await vue.nextTick();assert.equal(f.view.value.elapsedMs,4000);
+ f.props.pending=false;await vue.nextTick();f.advance(5000);assert.equal(f.view.value.elapsedMs,4000);
+ f.props.runId='20000000-0000-4000-8000-000000000002';f.props.pending=true;f.props.progress={...progress,elapsedMs:100};await vue.nextTick();assert.equal(f.view.value.elapsedMs,100);
+});
+
 test('incomplete file delivery offers regeneration while ordinary answer truncation offers continuation', async t => {
   const f = componentFixture(); t.after(f.unmount);
   f.props.generation = { truncated: true, canContinue: true };
@@ -136,10 +149,11 @@ test('incomplete file delivery offers regeneration while ordinary answer truncat
 
 test('waiting and finished views share a keyboard-native disclosure with fixed text and reduced motion', () => {
   const f = componentFixture(); f.unmount();
-  assert.match(f.source, /<details v-if="view\.phases\.length"/);
+  assert.match(f.source, /<details v-if="hasDetails"/);
   assert.match(f.source, /v-else class="process-compact"/);
-  assert.match(f.source, /<summary aria-label="处理过程">/);
-  assert.match(f.source, /process-summary/); assert.match(f.source, /阶段累计用时/); assert.match(f.source, /总用时/);
+  assert.match(f.source, /<summary aria-label="工作进展">/);
+  assert.match(f.source, /work-summary/); assert.match(f.source, /总用时/);
+  assert.doesNotMatch(f.source, /阶段累计用时|思考数据|正在接收模型数据|view\.summary|v-html/);
   assert.doesNotMatch(f.source, /process-metrics|model-active|首段输出|次调用/);
   assert.match(f.source, /summary:focus-visible/); assert.match(f.source, /prefers-reduced-motion:reduce/);
   assert.doesNotMatch(f.source, /v-html|reasoning_content|chain_of_thought|思考链/);

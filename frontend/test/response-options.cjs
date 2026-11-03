@@ -59,6 +59,7 @@ function storeFixture() {
     '@/utils/roleplay-defaults': defaults,
     '@/utils/file-resume': loadFile('utils/file-resume.ts'),
     '@/utils/coding-checklist': loadFile('utils/coding-checklist.ts'),
+    '@/utils/agent-work': loadFile('utils/agent-work.ts', { './coding-checklist': loadFile('utils/coding-checklist.ts') }),
   });
   pinia.setActivePinia(pinia.createPinia());
   const store = module.useChatStore(); store.currentConversation = conversation;

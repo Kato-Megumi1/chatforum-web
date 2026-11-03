@@ -9,6 +9,7 @@ function load(name, deps = {}) {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
   new Function('module', 'exports', 'require', code)(mod, mod.exports, key => {
+    if (key === './agent-work') return load('agent-work', { './coding-checklist': load('coding-checklist') });
     if (!deps[key]) throw Error('Unexpected import ' + key); return deps[key];
   });
   return mod.exports;
@@ -74,4 +75,18 @@ test('activity and live output telemetry cannot carry model text or tool argumen
   assert(!JSON.stringify(value).includes('SECRET_'));
   assert.equal(module.parseGenerationProgress({ ...input, activity: 'SECRET_STATUS' }).activity, undefined);
   assert.equal(module.parseGenerationProgress({ ...input, modelOutput: { ...input.modelOutput, textChars: -1 } }).modelOutput, undefined);
+});
+
+test('work SSE is same-run projected public state, independent from answer deltas and terminal recovery', async t => {
+  const module=load('chat-stream',{'./api':{apiUrl:path=>'http://fixture.invalid'+path},'./request':{default:{}},'@/stores/user':{useUserStore:()=>({token:'fixture'})},'./sse':load('sse')});
+  const runId='10000000-0000-4000-8000-000000000001';
+  const work={version:'agent-work-v1',runId,revision:'a'.repeat(64),activities:[],reasoning:'PRIVATE_REASONING',toolArguments:'PRIVATE_FILE',
+    plan:{version:'agent-task-plan-v1',revision:1,readyForAnswer:false,summary:'已核对资料，正在整理结果。',items:[
+      {id:'read',title:'核对资料',kind:'research',status:'done'},{id:'answer',title:'整理结果',kind:'deliver',status:'in_progress'}]}};
+  const terminal={...work,revision:'b'.repeat(64),plan:{...work.plan,revision:2,readyForAnswer:true,items:work.plan.items.map(item=>({...item,status:'done'}))}};
+  const frames=[['work',{...work,runId:'20000000-0000-4000-8000-000000000002'}],['work',work],['delta',{text:'合成回答',offset:4}],['complete',{status:'COMPLETED',result:{content:'合成回答',ragMetadata:{agentWork:terminal}}}]];
+  t.mock.method(globalThis,'fetch',async()=>new Response(frames.map(([event,value])=>'event: '+event+'\ndata: '+JSON.stringify(value)+'\n\n').join(''),{headers:{'content-type':'text/event-stream'}}));
+  const texts=[],snapshots=[];const result=await module.watchChatRun(runId,new AbortController().signal,text=>texts.push(text),undefined,value=>snapshots.push(value));
+  assert.deepEqual(texts,['合成回答']);assert.equal(snapshots.length,2);assert.equal(result.work.plan.readyForAnswer,true);
+  assert.equal(snapshots[0].plan.summary,work.plan.summary);assert(!JSON.stringify(snapshots).includes('PRIVATE_'));
 });
